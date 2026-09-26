@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light">
 <meta name="description" content="离线单文件工具：导入红外灰度 PNG / JPG，按自定义温度上下限做连续色标增强，实时预览并单张或批量导出。">
 <title>红外灰度色标增强工具</title>
@@ -73,15 +73,17 @@
   * { box-sizing: border-box; }
 
   html, body { height: 100%; }
+  html { -webkit-text-size-adjust: 100%; }   /* 横屏时不放大字号 */
   body {
     margin: 0; overflow: hidden;
     background: var(--n-2); color: var(--text-1);
     font: 13px/1.45 var(--font-ui);
     -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;    /* 触屏上不要「下拉刷新」打断预览操作 */
   }
   /* 数字一律等宽对齐：温度读数变化时不会左右跳动 */
   .num, #previewInfo, #logView, #progressLabel, #legendCanvas + * { font-variant-numeric: tabular-nums; }
-  #app { display: flex; flex-direction: column; height: 100vh; }
+  #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 
   /* ---------------- 菜单栏 ---------------- */
   #menubar {
@@ -140,7 +142,7 @@
   /* ---------------- 主区域 ---------------- */
   #main {
     flex: 1 1 auto; min-height: 0; display: grid;
-    grid-template-columns: 1fr 340px 270px; gap: 8px; padding: 8px 8px 6px;
+    grid-template-columns: minmax(0, 1fr) 340px 270px; gap: 8px; padding: 8px 8px 6px;
   }
   #previewPane, #scalePane, #imagePane {
     display: flex; flex-direction: column; min-height: 0; gap: 6px;
@@ -201,12 +203,14 @@
     from { background-position: 140% 0; }
     to { background-position: -40% 0; }
   }
-  #previewCanvas { display: block; width: 100%; height: 100%; }
+  #previewCanvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  /* Fit（整图可见）时单指纵向滑动让给页面滚动；放大之后才由画布接管拖动平移 */
+  #previewCanvas.preview-scrollable { touch-action: pan-y; }
 
   /* 温度上下限以下：左边更长的色标柱，右边节点卡片，两列并排 */
   #scaleBody {
     flex: 1 1 auto; min-height: 0;
-    display: grid; grid-template-columns: 64px 1fr; gap: 8px;
+    display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px;
   }
   #legendWrap { min-height: 0; position: relative; }
   /* 色标柱直接落在灰色背景上，不再套一圈白底 */
@@ -573,6 +577,92 @@
     background: var(--n-6); border: 3px solid var(--n-0); border-radius: 8px;
   }
   ::-webkit-scrollbar-thumb:hover { background: var(--n-7); }
+
+  /* =====================================================================
+   * 移动端适配：响应式布局 + 触控手势（桌面宽屏 + 鼠标的布局完全不变）
+   *   ≤1180px        窄桌面 / 大平板横屏：三栏保留，两侧收窄
+   *   ≤900px         平板竖屏 / 手机：改成单栏纵向流，整页滚动
+   *   ≤560px         手机细节：标题换行、下拉不出屏、输入框防 iOS 聚焦放大
+   *   pointer:coarse 任何触屏设备：点击目标放大到 36px
+   * ===================================================================== */
+  @media (max-width: 1180px) {
+    #main { grid-template-columns: minmax(0, 1fr) 300px 236px; }
+  }
+
+  @media (max-width: 900px) {
+    html, body { height: auto; }
+    body { overflow-x: hidden; overflow-y: auto; }
+    #app { height: auto; min-height: 100vh; min-height: 100dvh; }
+    #main {
+      display: flex; flex-direction: column; gap: 10px; min-height: 0;
+      padding: 10px max(10px, env(safe-area-inset-right))
+               max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    }
+    #previewPane, #scalePane, #imagePane { flex: 0 0 auto; }
+    /* 预览占约半屏，其余内容交给页面滚动 */
+    #previewWrap { flex: 0 0 auto; height: clamp(220px, 46vh, 420px); height: clamp(220px, 46dvh, 420px); }
+    /* 色标列：色标柱与节点卡片必须同高，给一个确定高度让节点列表自己滚动 */
+    #scaleBody {
+      flex: 0 0 auto; grid-template-columns: 56px minmax(0, 1fr);
+      height: clamp(300px, 50vh, 460px); height: clamp(300px, 50dvh, 460px);
+    }
+    #imageList { flex: 0 0 auto; max-height: 52vh; }
+    #logPane { height: auto; }
+    #logView { flex: 0 0 auto; height: 132px; }
+    #progressPanel { flex-wrap: wrap; row-gap: 6px; }
+    #progressOuter { flex: 1 1 140px; }
+    /* 弹窗不超出视口；「使用说明」的目录从左侧栏改成上方一栏 */
+    dialog { max-width: 94vw; max-height: 92vh; max-height: 92dvh; }
+    .dlg-head { flex-wrap: wrap; row-gap: 6px; }
+    .help-wrap { flex-direction: column; gap: 10px; height: min(66vh, 560px); height: min(66dvh, 560px); }
+    .help-nav {
+      flex: 0 0 auto; max-height: 34%; padding: 0 0 8px;
+      border-right: none; border-bottom: 1px solid var(--stroke-1);
+    }
+    .help-doc { padding-right: 0; }
+    .my-scales { max-height: 46vh; }
+  }
+
+  /* 触屏：点击目标至少 36px（Fluent 触控尺寸），行高与色块同步放大 */
+  @media (pointer: coarse) {
+    #app { -webkit-tap-highlight-color: transparent; }   /* 用 :active 态表达按下，去掉系统灰块 */
+    button, .dd .mi { -webkit-user-select: none; user-select: none; }   /* 长按不要选中按钮文字 */
+    button:not(.node-swap) { min-height: 36px; }
+    .dd .mi { padding: 9px 12px; }
+    .node-card { padding: 9px 8px; }
+    .node-card .swatch { width: 24px; height: 24px; }
+    .img-row { padding: 8px; }
+    input[type=checkbox] { width: 18px; height: 18px; }
+    .node-group .node-swap { width: 32px; height: 32px; }
+    .color-preview { width: 72px; height: 72px; }
+  }
+
+  @media (max-width: 560px) {
+    body { font-size: 14px; }
+    /* 预览标题行：图片信息独占一行，温度范围与「重置视图」排下一行 */
+    .pane-head { flex-wrap: wrap; row-gap: 6px; }
+    #previewInfo { flex: 1 1 100%; }
+    .range-inline { flex: 1 1 auto; gap: 4px; }
+    .range-inline input { width: 74px; }
+    .btn-row { gap: 4px; }
+    .dropbtn { padding: 6px 8px; }
+    /* 下拉菜单不超出屏幕：宽度按内容，最右侧那个改成往左展开 */
+    .menu .dd { min-width: 0; width: max-content; max-width: calc(100vw - 24px); }
+    .btn-row > .menu:last-child .dd { left: auto; right: 0; }
+    .node-card { padding: 9px 8px; }
+    .img-row { padding: 8px; }
+    /* 输入框字号 < 16px 时 iOS 会在聚焦时放大整页 */
+    input[type=text], input[type=number], select, #textScaleArea { font-size: 16px; }
+    #textScaleArea { min-height: 150px; }
+    .dlg-body { padding: 14px 12px 10px; gap: 10px; }
+    .dlg-foot { flex-wrap: wrap; row-gap: 8px; padding: 10px 12px 12px; }
+    .dlg-foot button { min-width: 72px; }
+    .color-editor { gap: 10px; }
+    .color-right .row { gap: 6px; }
+    .hex-input { width: 92px; }
+    .rgb-input { width: 56px; }
+    .empty-hint { margin: 8px; padding: 16px 10px; }
+  }
 
   /* ---------------- 无障碍：尊重系统的「减少动态效果」 ---------------- */
   @media (prefers-reduced-motion: reduce) {
@@ -1301,199 +1391,118 @@ function writeScaleStore(list) {
   }
 }
 
-/**
- * 内置「预设色标」：随工具一起发行的整套现成色标（数据来自项目里的 PreSet/*.json）。
- * 它们**没有** created 字段 —— created 是色标的身份，只在**导入的那一刻**按当前
+/* ---------------------------------------------------------------------
+ * 「预设色标」= 配置文件驱动，数据**不内嵌在本文件里**
+ *
+ *   PreSet/manifest.js   清单：按顺序列出要载入的预置文件
+ *   PreSet/<名字>.js     一条预置：一行包装 + 一段色标 JSON
+ *                        (window.IR_PRESETS = window.IR_PRESETS || []).push({ ... })
+ *
+ * 为什么配置文件是 .js 而不是 .json：双击 index.html 时页面源是 file://，
+ * 浏览器禁止 fetch / XMLHttpRequest 读本地文件（只放行 <script src> 载入的脚本），
+ * 所以「配置」必须写成一段可执行的 JS —— 数据部分仍然是普通 JSON。
+ * 增删 / 修改预置只改 PreSet/ 下的配置，不需要动 index.html。
+ *
+ * 预置里**没有** created 字段：created 是色标的身份，只在**导入的那一刻**按当前
  * 时间戳生成（见 presetToScale），所以每次导入都是一条全新的、可独立保存的色标。
- * 这里只是数据；「打开色标 → 预设」弹窗会把它渲染成可选的列表。
+ *
+ * 清单缺失 / 某个文件载入失败 / 内容非法：跳过并在日志里写明原因与办法，
+ * 预设列表就是空的 —— 不会退回任何硬编码数据。
+ * ------------------------------------------------------------------- */
+
+const PRESET_MANIFEST = 'PreSet/manifest.js';   // 清单文件（相对 index.html）
+let PRESET_SCALES = [];                          // 运行时从配置载入；载入完成前为空
+let presetLoadTask = null;                       // 载入 Promise：只跑一次
+
+/** 用 <script> 标签载入一个配置文件（file:// 下唯一可行的「读本地文件」方式） */
+function loadScriptTag(url) {
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+}
+
+/**
+ * 校验并规范化一条预置配置（就是配置文件里的那个对象）→ { name, nodes }。
+ * 复用正式校验：温度范围 / 颜色写法 / 同一位置最多 2 个节点，不合法时抛 ConfigError。
  */
-const PRESET_SCALES = [
-  {
-    name: '空白',
-    nodes: [
-      { temperature_k: 273.15, color: '#FFFFFF', pinned: true },
-    ],
-  },
-  {
-    name: 'BW',
-    nodes: [
-      { temperature_k: 323.15, color: '#000000', pinned: true },
-      { temperature_k: 188.15, color: '#FFFFFF' },
-    ],
-  },
-  {
-    name: 'IR-BD-ex',
-    nodes: [
-      { temperature_k: 301.15, color: '#000000', pinned: true },
-      { temperature_k: 301.15, color: '#030303' },
-      { temperature_k: 282.15, color: '#F7F7F7' },
-      { temperature_k: 282.15, color: '#6D6D6D' },
-      { temperature_k: 242.15, color: '#CACACA' },
-      { temperature_k: 242.15, color: '#3C3C3C' },
-      { temperature_k: 231.15, color: '#3C3C3C' },
-      { temperature_k: 231.15, color: '#6E6E6E' },
-      { temperature_k: 219.15, color: '#6E6E6E' },
-      { temperature_k: 219.15, color: '#A0A0A0' },
-      { temperature_k: 209.15, color: '#A0A0A0' },
-      { temperature_k: 209.15, color: '#000000' },
-      { temperature_k: 203.15, color: '#000000' },
-      { temperature_k: 203.15, color: '#FFFFFF' },
-      { temperature_k: 197.15, color: '#FFFFFF' },
-      { temperature_k: 197.15, color: '#878787' },
-      { temperature_k: 192.15, color: '#878787' },
-      { temperature_k: 192.15, color: '#555555' },
-      { temperature_k: 188.15, color: '#555555' },
-      { temperature_k: 188.15, color: '#333333' },
-      { temperature_k: 184.15, color: '#333333' },
-      { temperature_k: 184.15, color: '#1A1A1A' },
-      { temperature_k: 180.15, color: '#1A1A1A' },
-      { temperature_k: 180.15, color: '#000000' },
-    ],
-  },
-  {
-    name: 'IR-BD',
-    nodes: [
-      { temperature_k: 301.15, color: '#000000', pinned: true },
-      { temperature_k: 301.15, color: '#030303' },
-      { temperature_k: 282.15, color: '#F7F7F7' },
-      { temperature_k: 282.15, color: '#6D6D6D' },
-      { temperature_k: 242.15, color: '#CACACA' },
-      { temperature_k: 242.15, color: '#3C3C3C' },
-      { temperature_k: 231.15, color: '#3C3C3C' },
-      { temperature_k: 231.15, color: '#6E6E6E' },
-      { temperature_k: 219.15, color: '#6E6E6E' },
-      { temperature_k: 219.15, color: '#A0A0A0' },
-      { temperature_k: 209.15, color: '#A0A0A0' },
-      { temperature_k: 209.15, color: '#000000' },
-      { temperature_k: 203.15, color: '#000000' },
-      { temperature_k: 203.15, color: '#FFFFFF' },
-      { temperature_k: 197.15, color: '#FFFFFF' },
-      { temperature_k: 197.15, color: '#878787' },
-      { temperature_k: 192.15, color: '#878787' },
-      { temperature_k: 192.15, color: '#555555' },
-    ],
-  },
-  {
-    name: 'IR-CA',
-    nodes: [
-      { temperature_k: 323.15, color: '#880000', pinned: true },
-      { temperature_k: 313.15, color: '#020000' },
-      { temperature_k: 301.15, color: '#010101' },
-      { temperature_k: 293.15, color: '#1E1E1E' },
-      { temperature_k: 282.15, color: '#676667' },
-      { temperature_k: 278.15, color: '#002A46' },
-      { temperature_k: 278.15, color: '#0B3449' },
-      { temperature_k: 258.15, color: '#174E75' },
-      { temperature_k: 242.15, color: '#088294' },
-      { temperature_k: 231.15, color: '#16C26E' },
-      { temperature_k: 219.15, color: '#77FC02' },
-      { temperature_k: 213.15, color: '#F6EA00' },
-      { temperature_k: 213.15, color: '#F1EF00' },
-      { temperature_k: 203.15, color: '#FD4D00' },
-      { temperature_k: 203.15, color: '#FF4100' },
-      { temperature_k: 197.15, color: '#D20E11' },
-      { temperature_k: 197.15, color: '#C6241D' },
-      { temperature_k: 193.15, color: '#B94F7C' },
-      { temperature_k: 193.15, color: '#B75292' },
-      { temperature_k: 192.15, color: '#AB62D2' },
-      { temperature_k: 192.15, color: '#AF6AEB' },
-      { temperature_k: 188.15, color: '#583CB6' },
-      { temperature_k: 188.15, color: '#5138BE' },
-      { temperature_k: 183.15, color: '#C4CDFF' },
-      { temperature_k: 183.15, color: '#C6C6FF' },
-      { temperature_k: 173.15, color: '#FDFDFF' },
-    ],
-  },
-  {
-    name: 'IR-CC',
-    nodes: [
-      { temperature_k: 301.15, color: '#000000', pinned: true },
-      { temperature_k: 282.15, color: '#FFFFFF' },
-      { temperature_k: 282.15, color: '#674949' },
-      { temperature_k: 242.15, color: '#FFE1E1' },
-      { temperature_k: 242.15, color: '#A02323' },
-      { temperature_k: 231.15, color: '#A02323' },
-      { temperature_k: 231.15, color: '#FF6E00' },
-      { temperature_k: 219.15, color: '#FF6E00' },
-      { temperature_k: 219.15, color: '#FFE132' },
-      { temperature_k: 209.15, color: '#FFE132' },
-      { temperature_k: 209.15, color: '#A0D2FF' },
-      { temperature_k: 203.15, color: '#A0D2FF' },
-      { temperature_k: 203.15, color: '#00BFFF' },
-      { temperature_k: 197.15, color: '#00BFFF' },
-      { temperature_k: 197.15, color: '#4169E1' },
-      { temperature_k: 192.15, color: '#4169E1' },
-      { temperature_k: 192.15, color: '#000096' },
-      { temperature_k: 188.15, color: '#000096' },
-      { temperature_k: 188.15, color: '#FFFFFF' },
-    ],
-  },
-  {
-    name: 'OTT',
-    nodes: [
-      { temperature_k: 301.15, color: '#000000', pinned: true },
-      { temperature_k: 253.15, color: '#C8C8C8' },
-      { temperature_k: 253.15, color: '#00FFFF' },
-      { temperature_k: 243.15, color: '#000475' },
-      { temperature_k: 233.15, color: '#00F902' },
-      { temperature_k: 233.15, color: '#00FF00' },
-      { temperature_k: 223.15, color: '#F9FF00' },
-      { temperature_k: 223.15, color: '#FFFF00' },
-      { temperature_k: 213.15, color: '#FF0700' },
-      { temperature_k: 213.15, color: '#FF0000' },
-      { temperature_k: 203.15, color: '#070000' },
-      { temperature_k: 203.15, color: '#000000' },
-      { temperature_k: 193.15, color: '#DFDEDE' },
-      { temperature_k: 193.15, color: '#E865BD' },
-      { temperature_k: 183.15, color: '#820382' },
-      { temperature_k: 183.15, color: '#FFFFFF' },
-    ],
-  },
-  {
-    name: 'RAMMB',
-    nodes: [
-      { temperature_k: 308.15, color: '#000000', pinned: true },
-      { temperature_k: 243.15, color: '#FFFFFF' },
-      { temperature_k: 243.15, color: '#B5FFFF' },
-      { temperature_k: 223.15, color: '#565757' },
-      { temperature_k: 223.15, color: '#000062' },
-      { temperature_k: 213.15, color: '#0000FB' },
-      { temperature_k: 213.15, color: '#006100' },
-      { temperature_k: 203.15, color: '#00FC00' },
-      { temperature_k: 203.15, color: '#610000' },
-      { temperature_k: 193.15, color: '#FB0000' },
-      { temperature_k: 193.15, color: '#FFFF00' },
-      { temperature_k: 183.15, color: '#56564D' },
-      { temperature_k: 183.15, color: '#FFFFFF' },
-      { temperature_k: 173.15, color: '#565656' },
-    ],
-  },
-  {
-    name: 'RBTOP',
-    nodes: [
-      { temperature_k: 323.15, color: '#000000', pinned: true },
-      { temperature_k: 299.15, color: '#777777' },
-      { temperature_k: 299.15, color: '#000000' },
-      { temperature_k: 283.15, color: '#5F5F5F' },
-      { temperature_k: 278.15, color: '#676767' },
-      { temperature_k: 258.15, color: '#FAFAFA' },
-      { temperature_k: 253.15, color: '#BF00FF' },
-      { temperature_k: 245.15, color: '#0000FF' },
-      { temperature_k: 245.15, color: '#000DF1' },
-      { temperature_k: 243.15, color: '#0028D6' },
-      { temperature_k: 228.15, color: '#00F40B' },
-      { temperature_k: 228.15, color: '#03FF00' },
-      { temperature_k: 218.15, color: '#EDFF00' },
-      { temperature_k: 218.15, color: '#FFF900' },
-      { temperature_k: 208.15, color: '#FF1100' },
-      { temperature_k: 208.15, color: '#F90000' },
-      { temperature_k: 198.15, color: '#100000' },
-      { temperature_k: 198.15, color: '#0D0D0D' },
-      { temperature_k: 183.15, color: '#A0A0A0' },
-      { temperature_k: 173.15, color: '#FFFFFF' },
-    ],
-  },
-];
+function presetFromConfig(raw) {
+  const rec = parseScaleRecord(raw);
+  return {
+    name: rec.name,
+    nodes: rec.nodes.map(n => {
+      const o = { temperature_k: roundHalfEven(n.kelvin), color: rgbToHex(n.rgb) };
+      if (n.pinned) o.pinned = true;
+      return o;
+    }),
+  };
+}
+
+/** 载入清单里列出的全部预置文件（幂等；结果写进 PRESET_SCALES，返回同一个 Promise） */
+function loadPresets() {
+  if (presetLoadTask) return presetLoadTask;
+  presetLoadTask = (async () => {
+    window.IR_PRESETS = [];
+    const manifestURL = new URL(PRESET_MANIFEST, document.baseURI);
+    if (!await loadScriptTag(manifestURL.href)) {
+      log('未找到预设配置 ' + PRESET_MANIFEST + '：预设列表为空。'
+        + '把 PreSet 目录放在 index.html 旁边即可恢复；'
+        + '也可以先用「管理色标 → 从设备导入」把色标 JSON 收进本地色标库。');
+      return PRESET_SCALES;
+    }
+    const files = Array.isArray(window.IR_PRESET_FILES) ? window.IR_PRESET_FILES.slice() : [];
+    if (!files.length) {
+      log('预设清单 ' + PRESET_MANIFEST + ' 里没有列出任何文件：预设列表为空。');
+      return PRESET_SCALES;
+    }
+    const loaded = [];
+    const seen = new Set();
+    for (const item of files) {
+      const rel = String(item);
+      let url;
+      try { url = new URL(rel, manifestURL); }
+      catch (e) { log('预设清单里的文件名不合法，已跳过：' + rel); continue; }
+      if (seen.has(url.href)) { log('预设清单里重复列出了同一个文件，已跳过：' + rel); continue; }
+      seen.add(url.href);
+      const before = window.IR_PRESETS.length;
+      if (!await loadScriptTag(url.href)) {
+        log('预设文件载入失败，已跳过：' + rel + '（确认 PreSet 目录里有这个文件）');
+        continue;
+      }
+      const added = window.IR_PRESETS.slice(before);
+      if (!added.length) { log('预设文件没有提供色标数据，已跳过：' + rel); continue; }
+      for (const raw of added) {
+        try {
+          const preset = presetFromConfig(raw);
+          if (raw && raw.created !== undefined) {
+            log('提示：' + rel + ' 里的 created 被忽略（预置的创建时间在导入那一刻才生成）。');
+          }
+          if (added.length === 1 && rel.replace(/\.js$/i, '') !== preset.name) {
+            log('提示：' + rel + ' 里的 name 是「' + preset.name + '」，与文件名不一致。');
+          }
+          loaded.push(preset);
+        } catch (e) {
+          log('预设文件 ' + rel + ' 里的色标不能用，已跳过：' + e.message);
+        }
+      }
+    }
+    PRESET_SCALES = loaded;
+    if (loaded.length) {
+      log('已从配置文件载入 ' + loaded.length + ' 条预置色标：'
+        + loaded.map(p => p.name).join(' / '));
+    } else {
+      log('没有载入任何预置色标：预设列表为空（原因见上面的日志）。');
+    }
+    return PRESET_SCALES;
+  })();
+  return presetLoadTask;
+}
+
+/** 需要预置数据的地方（「打开色标 → 预设」）先 await 它 */
+const ensurePresetsLoaded = () => presetLoadTask || loadPresets();
 
 /** 预置色标在弹窗里的内部行号（负数，不会与真实毫秒时间戳冲突） */
 const PRESET_ROW_BASE = -1000;
@@ -1501,6 +1510,12 @@ const PRESET_ROW_BASE = -1000;
 /** 把预置色标包装成弹窗能用的记录（只为了列表渲染与单选，导入时不会用到这个 created） */
 function presetRecords() {
   return PRESET_SCALES.map((p, i) => ({ created: PRESET_ROW_BASE - i, name: p.name, nodes: p.nodes }));
+}
+
+/** 按弹窗行号取回预置色标（导入时用它：行号与列表顺序严格对应，重名也不会选错） */
+function presetByRow(created) {
+  const index = PRESET_ROW_BASE - Number(created);
+  return (index >= 0 && index < PRESET_SCALES.length) ? PRESET_SCALES[index] : null;
 }
 
 /** 按名字取一条预置色标（找不到返回 null） */
@@ -2210,6 +2225,8 @@ function drawPreview() {
   ctx.clearRect(0, 0, cv.width, cv.height);
   // 有图时让 #previewWrap 显示棋盘格，透明区域一眼可见
   $('previewWrap').classList.toggle('checker', !!state.offscreen);
+  // Fit 时把纵向滑动留给页面（手机上还能上下滚），放大后拖动才是平移
+  cv.classList.toggle('preview-scrollable', state.preview.fit);
   if (!state.offscreen) {
     ctx.fillStyle = cssVar('--text-3', '#7b838c');
     ctx.font = (13 * dpr) + 'px "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif';
@@ -3003,7 +3020,7 @@ function drawHScaleLegend(canvas, record) {
  * opts = { title, okLabel, manage, presets, records }
  *   manage=false：单选后按底部右侧按钮载入，resolve { action:'import', raw, parsed } 或 null
  *   manage=true ：顶部有「多选 + 删除」，底部左「取消」右「导入」
- *   presets=true：列表来自传入的 records（内置预置色标），不读本地库；每条不显示创建时间
+ *   presets=true：列表来自传入的 records（PreSet/ 配置文件里的预置），不读本地库；每条不显示创建时间
  */
 function openScaleLibraryDialog(records, opts) {
   const manage = !!(opts && opts.manage);
@@ -3099,6 +3116,9 @@ function openScaleLibraryDialog(records, opts) {
         empty.className = 'my-scales-empty';
         empty.innerHTML = presets
           ? '<div class="eh-title">没有可用的预设</div>'
+            + '<div class="eh-sub">预置来自 ' + PRESET_MANIFEST + ' 里列出的配置文件。'
+            + '请确认 PreSet 目录与 index.html 放在一起（日志里有具体原因）；'
+            + '也可以用「管理色标 → 从设备导入」把色标 JSON 收进本地色标库。</div>'
           : '<div class="eh-title">还没有保存过色标</div>'
             + '<div class="eh-sub">用「保存色标 → 保存」把当前色标存到这里</div>';
         list.appendChild(empty);
@@ -3447,16 +3467,18 @@ async function confirmDiscardChanges(actionLabel) {
 }
 
 /**
- * 「打开色标 → 预设」：弹出内置预置色标列表（样式与「我的色标」一致，底部左「取消」右「导入」），
- * 选一条按「导入」载入成当前色标。预置文件里没有 created，**按导入时刻生成**（见 presetToScale），
+ * 「打开色标 → 预设」：弹出预置色标列表（样式与「我的色标」一致，底部左「取消」右「导入」），
+ * 选一条按「导入」载入成当前色标。列表来自 PreSet/ 下的配置文件，所以先确保载入完成。
+ * 预置里没有 created，**按导入时刻生成**（见 presetToScale），
  * 所以导入进来的是一条全新的、可以再「保存」进本地库的色标。
  */
 async function actionPresets() {
   if (state.busy) return false;
+  await ensurePresetsLoaded();               // 预置是外部配置：第一次打开时载入
   const picked = await openScaleLibraryDialog(presetRecords(),
     { title: '预设', okLabel: '导入', presets: true });
   if (!picked) return false;
-  const preset = presetByName(picked.parsed.name);
+  const preset = presetByRow(picked.raw && picked.raw.created);
   if (!preset) {
     await showError('导入失败', '这条预置色标找不到对应数据，当前色标保持不变。');
     return false;
@@ -4223,34 +4245,103 @@ function bindUI() {
   // 日志
   $('btnClearLog').addEventListener('click', () => { $('logView').innerHTML = ''; });
 
-  // 预览：重置视图 / 缩放 / 平移
+  // 预览：重置视图 / 滚轮缩放 / 拖动平移 / 触屏捏合缩放 + 双击放大复原
   $('btnResetView').addEventListener('click', resetPreviewView);
   const cv = $('previewCanvas');
+  const clampScale = s => Math.max(0.02, Math.min(s, 64));
+  /** 以画布坐标 (px, py) 为锚点缩放到 ns：锚点下的像素保持不动 */
+  function zoomAt(px, py, ns) {
+    const p = state.preview;
+    ns = clampScale(ns);
+    if (Math.abs(ns - p.scale) < 1e-9) return;
+    const ix = (px - p.ox) / p.scale, iy = (py - p.oy) / p.scale;
+    p.scale = ns;
+    p.ox = px - ix * ns;
+    p.oy = py - iy * ns;
+    p.fit = false;
+    drawPreview();
+  }
+  const fitScale = () => {
+    const img = state.offscreen;
+    if (!img) return 1;
+    return Math.min(cv.clientWidth / img.width, cv.clientHeight / img.height);
+  };
   cv.addEventListener('wheel', e => {
     if (!state.offscreen || state.busy) return;
     e.preventDefault();
     const rect = cv.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const p = state.preview;
-    const factor = Math.pow(1.25, -e.deltaY / 120);
-    const ns = Math.max(0.02, Math.min(p.scale * factor, 64));
-    if (Math.abs(ns - p.scale) < 1e-9) return;
-    const ix = (mx - p.ox) / p.scale, iy = (my - p.oy) / p.scale;
-    p.scale = ns;
-    p.ox = mx - ix * ns;
-    p.oy = my - iy * ns;
-    p.fit = false;
-    drawPreview();
+    zoomAt(e.clientX - rect.left, e.clientY - rect.top,
+      state.preview.scale * Math.pow(1.25, -e.deltaY / 120));
   }, { passive: false });
-  cv.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || !state.offscreen || state.busy) return;
+
+  const pointers = new Map();        // 正在按下的触点：pointerId -> {x, y}（屏幕坐标）
+  let pinch = null;                  // 双指捏合的起始基准
+  let lastTap = { t: 0, x: 0, y: 0 };   // 触屏双击判定
+  const canvasXY = (clientX, clientY) => {
+    const r = cv.getBoundingClientRect();
+    return { x: clientX - r.left, y: clientY - r.top };
+  };
+  /** 记录双指捏合基准：中点对应的图像坐标 + 当前缩放 */
+  function pinchStart() {
+    const pts = [...pointers.values()];
+    const a = pts[0], b = pts[1];
+    const mid = canvasXY((a.x + b.x) / 2, (a.y + b.y) / 2);
+    const p = state.preview;
+    return {
+      dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      scale: p.scale,
+      ix: (mid.x - p.ox) / p.scale,
+      iy: (mid.y - p.oy) / p.scale,
+    };
+  }
+  function beginPan(x, y) {
     state.panning = true;
-    state.panStart = { x: e.clientX, y: e.clientY };
+    state.panStart = { x, y };
     state.panOrigin = { x: state.preview.ox, y: state.preview.oy };
-    cv.setPointerCapture(e.pointerId);
     cv.style.cursor = 'grabbing';
+  }
+  cv.addEventListener('pointerdown', e => {
+    if (!state.offscreen || state.busy) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // 触屏双击：Fit <-> 放大 2.5 倍（鼠标仍用滚轮，行为不变）
+    if (e.pointerType !== 'mouse' && pointers.size === 0) {
+      const now = Date.now();
+      const near = Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 28;
+      if (now - lastTap.t < 320 && near) {
+        lastTap.t = 0;
+        if (state.preview.fit) {
+          const xy = canvasXY(e.clientX, e.clientY);
+          zoomAt(xy.x, xy.y, fitScale() * 2.5);
+        } else {
+          resetPreviewView();
+        }
+        return;
+      }
+      lastTap = { t: now, x: e.clientX, y: e.clientY };
+    }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 合成事件没有真实指针 */ }
+    if (pointers.size === 1) {
+      // 触屏在 Fit 状态下不拖动（纵向留给页面滚动）；鼠标行为与桌面版一致
+      if (!state.preview.fit || e.pointerType === 'mouse') beginPan(e.clientX, e.clientY);
+    } else if (pointers.size === 2) { state.panning = false; pinch = pinchStart(); }
   });
   cv.addEventListener('pointermove', e => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pointers.size >= 2) {
+      const pts = [...pointers.values()];
+      const a = pts[0], b = pts[1];
+      const mid = canvasXY((a.x + b.x) / 2, (a.y + b.y) / 2);
+      const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const p = state.preview;
+      p.scale = clampScale(pinch.scale * dist / pinch.dist);
+      p.ox = mid.x - pinch.ix * p.scale;
+      p.oy = mid.y - pinch.iy * p.scale;
+      p.fit = false;
+      drawPreview();
+      return;
+    }
     if (!state.panning) return;
     state.preview.ox = state.panOrigin.x + (e.clientX - state.panStart.x);
     state.preview.oy = state.panOrigin.y + (e.clientY - state.panStart.y);
@@ -4258,13 +4349,26 @@ function bindUI() {
     drawPreview();
   });
   const endPan = e => {
-    if (!state.panning) return;
+    pointers.delete(e.pointerId);
+    try { cv.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    if (pointers.size >= 2) { pinch = pinchStart(); return; }   // 还按着两根：重取基准
+    pinch = null;
+    if (pointers.size === 1 && !state.preview.fit) {            // 松开一根：剩下那根继续平移
+      const only = [...pointers.values()][0];
+      beginPan(only.x, only.y);
+      return;
+    }
+    if (!state.panning) { cv.style.cursor = ''; return; }
     state.panning = false;
     cv.style.cursor = '';
-    try { cv.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   };
   cv.addEventListener('pointerup', endPan);
   cv.addEventListener('pointercancel', endPan);
+  // 失焦 / 指针被系统收走时，别把「正在平移」的状态留下
+  window.addEventListener('blur', () => {
+    pointers.clear(); pinch = null;
+    if (state.panning) { state.panning = false; cv.style.cursor = ''; }
+  });
 
   // 批量导出取消
   $('btnCancelExport').addEventListener('click', () => {
@@ -4318,6 +4422,7 @@ function init() {
   setBusy(false);
   log('程序已启动。默认色标：50°C 黑色 → -85°C 白色。');
   log('温度映射：T = 50 - 135 × p / 255。');
+  loadPresets();     // 预设来自 PreSet/ 下的配置文件：异步载入，结果写进日志
   if (!hasCompressionStream()) {
     log('警告：当前浏览器不支持 DecompressionStream，将使用浏览器解码/编码，半透明像素可能有 ±1~2 灰度误差。');
   }
@@ -4354,7 +4459,7 @@ else init();
 ### 1.2 快速开始（三步）
 
 1. 点右上角 **「添加图片」**，选一张或多张 PNG / JPG（可多选；不支持拖拽）。
-2. 看一眼预览区顶部的 **温度范围（°C）** 上下限（默认 50 / -85），需要就改；再点 **打开色标 → 预设** 挑一套现成色标（内置 8 套，含标准 BD 色阶；想从零搭就选「空白」）。
+2. 看一眼预览区顶部的 **温度范围（°C）** 上下限（默认 50 / -85），需要就改；再点 **打开色标 → 预设** 挑一套现成色标（配置文件里现成的 9 套，含标准 BD 色阶；想从零搭就选「空白」）。
 3. 点 **导出图片 → 单张导出**（导出当前预览的那张）或 **批量导出**（先勾选要导出的图片）。
 
 ### 1.3 界面总览
@@ -4366,6 +4471,9 @@ else init();
 | 中间色标列 | 上方：三组下拉按钮 + 色标名称 + 单位 + 只读的色标范围；下方左「细色标柱 + 温度刻度」、右「色标节点卡片列表」 |
 | 右侧图片列表 | 缩略图 + 显示名，当前预览行浅蓝底；顶部「选择」开关与「导出图片」，底部「添加图片」与「删除选中」 |
 | 底部运行日志 | 每步操作都带时间戳，「清空日志」可清屏 |
+
+> 窗口较窄时（手机 / 平板竖屏）上表的「左侧 / 中间 / 右侧」会变成**自上而下的单栏**，整页可以上下滚动；
+> 按钮与菜单会自动加大到适合手指点按的尺寸，下拉菜单不会超出屏幕。
 
 按钮与菜单一览：
 
@@ -4426,39 +4534,51 @@ else init();
 
 ## 4. 预设色标
 
-**打开色标 → 预设** 会弹出内置的预置色标列表：样式与「我的色标」一样（每条一条横向 legend + 名称），
+**打开色标 → 预设** 会弹出配置文件里的预置色标列表：样式与「我的色标」一样（每条一条横向 legend + 名称），
 底部是左 **取消** 右 **导入**。选中一条按「导入」，它就变成当前正在编辑的色标。
 
 | 预设 | 节点数 | 色标范围 | 说明 |
 | --- | --- | --- | --- |
 | **空白** | 1 | 0°C 一个点 | 单个白色保留节点 → 整幅纯白，用来从零搭一套色标 |
-| BW | 2 | 50 ~ -85°C | 黑白连续色标（与程序启动时的默认色标相同） |
+| IR-BW | 2 | 50 ~ -85°C | 黑白连续色标（与程序启动时的默认色标相同） |
 | IR-BD | 18 | 28 ~ -81°C | 标准 BD 色阶（早期版本） |
 | IR-BD-ex | 24 | 28 ~ -93°C | 标准 BD 色阶扩展版，冷端多了三段深灰平台 |
+| IR-CA | 26 | 50 ~ -100°C | 彩色增强（灰 → 蓝绿 → 黄 → 红 → 紫 → 白） |
 | IR-CC | 19 | 28 ~ -85°C | 彩色增强（红 / 橙 / 黄 / 青 / 蓝） |
-| OTT | 16 | 28 ~ -90°C | OTT 配色 |
-| RAMMB | 14 | 35 ~ -100°C | RAMMB 配色，色标宽度覆盖整个默认图片范围 |
-| RBTOP | 20 | 50 ~ -100°C | RBTOP 配色 |
+| IR-OTT | 16 | 28 ~ -90°C | OTT 配色 |
+| IR-RAMMB | 14 | 35 ~ -100°C | RAMMB 配色，色标宽度覆盖整个默认图片范围 |
+| IR-RBTOP | 20 | 50 ~ -100°C | RBTOP 配色 |
 
 - **预设文件里没有 `created`**：`created`（毫秒时间戳）是色标的身份，**只在导入的那一刻生成**。
   所以每导入一次就是一条**全新的**色标，可以再点「保存色标 → 保存」把它存进本地色标库，
   之后它就和预设无关了（改它、删它都不会影响预设本身）。
 - 预设**不会**自动进本地色标库：程序启动时不再往 localStorage 里塞任何东西，
-  列表来自随工具发行的那份数据（源文件见项目里的 `PreSet/*.json`）。
+  列表来自随工具发行的配置文件（见下面「预置数据的来源」）。
 - 导入的色标出现在标题栏名字里（例如 `IR-BD-ex`），此时不带 `*`（视为已保存状态），
   但**没有**对应文件，按「保存」只会存进本地色标库。
 - 当前色标有未保存修改时，选完预设按「导入」会先问一次「是否继续」，取消则什么都不变。
 - 想再要一份「干净的空白色标」，导入 **空白** 即可（这就是原来「新色标」的用法）。
 
-预置数据的来源：`PreSet/` 目录里放着这 8 份色标 JSON（文件名与预设名不一定相同，
-例如 `IR-RBTOP.json` 里写的是 `RBTOP`），`index.html` 里内嵌的是它们的副本。
-改了 JSON 之后，用下面第一条命令可以把它们重新同步进 `index.html`，
-第二条只检查两边是否一致（不一致时退出码为 1）：
+**预置数据的来源（配置文件驱动）**
 
-```powershell
-python build/gen_presets.py
-python build/gen_presets.py --check
-```
+预置列表**不在 `index.html` 里**，而是每次打开页面时从 `PreSet/` 目录读配置：
+
+| 文件 | 作用 |
+| --- | --- |
+| `PreSet/manifest.js` | 清单：`window.IR_PRESET_FILES = ['空白.js', 'IR-BW.js', …]`，**顺序就是弹窗里的顺序** |
+| `PreSet/<名字>.js` | 一条预置：一行 JS 包装 + 一段色标 JSON；文件名必须与里面的 `name` 一致 |
+
+- **新增一套预置**：在 `PreSet/` 里复制一份现有的 `.js` 改数据，再在 `manifest.js` 的清单里加一行即可。
+  **完全不用动 `index.html`**，也没有任何构建 / 生成步骤。
+- **修改一套预置**：直接改对应的那个文件，重新打开页面就生效。
+- **为什么配置文件是 `.js` 而不是 `.json`**：双击打开时页面源是 `file://`，
+  浏览器禁止 `fetch` / `XMLHttpRequest` 读本地文件，只允许 `<script src>` 载入脚本，
+  所以配置文件写成「一行 JS 包装 + 一段 JSON」，数据部分仍然可以直接从「另存为」的 JSON 里拷。
+- **出问题时的表现**：清单缺失、某个文件载入失败、内容非法（温度越界 / 颜色写法不对 /
+  同一位置超过 2 个节点），或文件名与 `name` 不一致（只提示不算错）——
+  都会**跳过该条并在运行日志里写明原因**，预设列表为空，**不会退回任何硬编码数据**。
+- `PreSet` 目录要与 `index.html` 放在一起；只拷走 `index.html` 也能正常使用，只是预设列表为空
+  （此时可以用「管理色标 → 从设备导入」把色标 JSON 收进本地色标库）。
 
 ## 5. 色标库
 
@@ -4552,8 +4672,12 @@ python build/gen_presets.py --check
 - 默认 Fit（整幅适应窗口），窗口大小变化时自动重新适应。
 - **滚轮缩放**：以鼠标位置为中心，1.25 倍一档，范围 0.02× ~ 64×。
 - **拖动平移**：按住左键拖动。
+- **触屏手势**（手机 / 平板 / 触摸屏笔记本）：**单指拖动 = 平移**（Fit 状态下单指上下滑是**滚动页面**）；
+  **双指捏合 = 缩放**（以两指中点为锚点）；**双击 = 在 Fit 与 2.5 倍之间切换**。
 - **重置视图**：只把缩放和平移恢复成 Fit，**不改变**色标与图片数据。
 - 预览上色与 legend 使用同一个 `ColorMapper`，所以「预览里看到的颜色」就是导出后的颜色。
+- **窄屏（手机 / 平板竖屏）**：界面自动从「左预览 / 中色标 / 右图片列表」变成**自上而下的单栏**，整页可以上下滚动；
+  预览固定约半屏高，色标节点列表与图片列表在各自的框内滚动，日志固定在整页底部。
 
 ## 9. 导出图片
 

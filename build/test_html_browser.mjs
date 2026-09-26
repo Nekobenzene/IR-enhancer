@@ -42,6 +42,33 @@ const html = fs.readFileSync(htmlPath, 'utf8');
 const expected = JSON.parse(fs.readFileSync(path.join(fixtureDir, 'expected.json'), 'utf8'));
 const pngB64 = fs.readFileSync(path.join(fixtureDir, 'la.png')).toString('base64');
 
+/**
+ * 预置色标配置：Node 侧按清单（PreSet/manifest.js）把配置文件读一遍，
+ * 注入页面后用来核对「页面里的预置列表 == 磁盘上的配置」。
+ */
+const presetDir = path.join(path.dirname(htmlPath), 'PreSet');
+function evalPresetConfig(file) {
+  const scope = {};
+  // 配置文件只依赖 window：这里模拟一个 window 执行它（与浏览器的 <script> 载入等价）
+  new Function('window', fs.readFileSync(path.join(presetDir, file), 'utf8'))(scope);
+  return scope;
+}
+let presetManifest = [];
+let presetConfigs = [];
+try {
+  presetManifest = evalPresetConfig('manifest.js').IR_PRESET_FILES || [];
+  presetConfigs = [].concat(...presetManifest.map(f => evalPresetConfig(f).IR_PRESETS || []));
+} catch (e) {
+  console.error('读不到预置配置：' + e.message);
+  process.exit(1);
+}
+if (!presetManifest.length || !presetConfigs.length) {
+  console.error('预置配置为空：PreSet/manifest.js 或它列出的文件有问题');
+  process.exit(1);
+}
+const presetNames = presetConfigs.map(p => p.name);
+console.log('预置配置：' + presetConfigs.length + ' 条（' + presetManifest.join(', ') + '）');
+
 const CHROME = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -59,6 +86,8 @@ const fixture = {
   jpgWidth: expected.jpgWidth,
   jpgHeight: expected.jpgHeight,
   jpgGray: expected.jpgGray,
+  presetNames: presetNames,
+  presetConfigs: presetConfigs,
 };
 
 const headInject = `
@@ -83,9 +112,10 @@ window.__runBrowserTest = async function () {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const waitFor = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await sleep(25); } return false; };
   const fire = el => el.dispatchEvent(new Event('change', { bubbles: true }));
-  /** 直接载入「BW」预设（2 个节点，等于原来的默认黑白色标），等价于「预设 → BW → 导入」 */
+  /** 直接载入「IR-BW」预设（2 个节点，等于原来的默认黑白色标），等价于「预设 → IR-BW → 导入」 */
   const doNewScale = async () => {
-    state.scale = presetToScale(presetByName('BW'));
+    await ensurePresetsLoaded();
+    state.scale = presetToScale(presetByName('IR-BW'));
     state.scaleName = null;
     state.scaleHandle = null;
     state.baseline = scaleToText(state.scale);
@@ -110,7 +140,7 @@ window.__runBrowserTest = async function () {
     check('初始节点卡片 = 2（一个保留节点 + 一个普通节点）', document.querySelectorAll('.node-card').length === 2);
     check('初始 Legend 已着色', legendHasColor());
 
-    /* ---- 预设：内置预置色标列表（原「新色标」入口） ---- */
+    /* ---- 预设：配置文件驱动的预置色标列表（原「新色标」入口） ---- */
     {
       const openMenu = $('btnOpenScale').closest('.menu');
       check('「打开色标」里不再有「新色标」', !openMenu.querySelector('[data-act="new"]'));
@@ -120,9 +150,29 @@ window.__runBrowserTest = async function () {
       check('写死的 BD 色标已彻底移除（启动不再往本地库塞东西）',
         typeof ensureBuiltinScales === 'undefined' && typeof BUILTIN_BD_SCALE === 'undefined'
         && typeof actionNew === 'undefined');
-      check('预置数据共 8 条且「空白」第一',
-        PRESET_SCALES.length === 8 && PRESET_SCALES[0].name === '空白',
-        PRESET_SCALES.map(p => p.name).join(','));
+
+      /* ---- 预设 = 配置文件驱动：index.html 里没有任何预置数据 ---- */
+      check('index.html 里不再内嵌预置数据（没有 PRESET_SCALES 字面量）',
+        !/const PRESET_SCALES = \\[/.test(document.documentElement.outerHTML),
+        (document.documentElement.outerHTML.match(/const PRESET_SCALES[^\\n]*/) || ['无'])[0]);
+      await ensurePresetsLoaded();
+      await ensurePresetsLoaded();          // 第二次应当是同一个缓存，不会重复载入
+      const cfgNames = window.__fixture.presetNames;
+      check('预置列表来自 PreSet/ 下的配置文件（条数与清单一致）',
+        PRESET_SCALES.length === cfgNames.length && PRESET_SCALES.length >= 2,
+        PRESET_SCALES.length + ' vs ' + cfgNames.length);
+      check('预置名字与顺序 = 配置文件里的名字与顺序',
+        PRESET_SCALES.map(p => p.name).join('|') === cfgNames.join('|'),
+        PRESET_SCALES.map(p => p.name).join('|'));
+      check('「空白」仍排在第一位', PRESET_SCALES[0].name === '空白', PRESET_SCALES[0].name);
+      check('预置节点数据与配置文件逐节点一致（页面 == 磁盘上的配置）',
+        JSON.stringify(PRESET_SCALES) === JSON.stringify(window.__fixture.presetConfigs.map(presetFromConfig)),
+        PRESET_SCALES.map(p => p.name + ':' + p.nodes.length).join(' '));
+      check('预置里没有 created（导入那一刻才生成）',
+        PRESET_SCALES.every(p => p.created === undefined));
+      check('载入结果写进了运行日志',
+        $('logView').textContent.indexOf('已从配置文件载入') >= 0
+        && $('logView').textContent.indexOf('条预置色标') >= 0);
 
       // 干净状态 + 无图片时打开弹窗
       try { localStorage.removeItem(SCALE_STORE_KEY); } catch (e) { /* ignore */ }
@@ -132,11 +182,15 @@ window.__runBrowserTest = async function () {
         $('myScalesDialog').open === true && $('scaleLibTitle').textContent === '预设',
         $('scaleLibTitle').textContent);
       const pItems = $('myScalesList').querySelectorAll('.scale-item');
-      check('弹窗里列出全部 8 条预置', pItems.length === 8, String(pItems.length));
-      check('第一行是「空白」', pItems[0].querySelector('.si-name').textContent === '空白',
-        pItems[0].querySelector('.si-name').textContent);
+      check('弹窗里列出配置文件里的全部预置',
+        pItems.length === PRESET_SCALES.length && pItems.length === cfgNames.length,
+        pItems.length + ' vs ' + PRESET_SCALES.length);
+      check('列表顺序与配置文件一致（第一行是「空白」）',
+        Array.prototype.map.call(pItems, it => it.querySelector('.si-name').textContent).join('|')
+          === cfgNames.join('|'),
+        Array.prototype.map.call(pItems, it => it.querySelector('.si-name').textContent).join('|'));
       check('每条预置都有横向 legend 画布',
-        $('myScalesList').querySelectorAll('.scale-item canvas').length === 8);
+        $('myScalesList').querySelectorAll('.scale-item canvas').length === PRESET_SCALES.length);
       check('预置不显示假的创建时间，改说「导入时记录」',
         pItems[0].querySelector('.si-time').textContent.indexOf('创建于') < 0
         && pItems[0].querySelector('.si-time').textContent.indexOf('导入') >= 0,
@@ -1651,7 +1705,7 @@ window.__openMenusForShot = function () {
 };
 window.__openMyScalesForShot = function () {
   closeAllMenus();
-  openMyScalesDialog(sortScaleRecords(readScaleStore()));
+  openScaleLibraryDialog(sortScaleRecords(readScaleStore()));
   return true;
 };
 /** 造几条示例色标并打开「管理色标」，多选两条，便于截图核对 */
@@ -1684,10 +1738,224 @@ window.__openManageForShot = function () {
   }, 80);
   return true;
 };
+
+/* =====================================================================
+ * 移动端适配自检：由驱动脚本用 CDP 的设备模拟调用（手机 / 平板竖屏）
+ * ===================================================================== */
+window.__runMobileTest = async function (dev) {
+  const R = { ok: [], fail: [] };
+  const tag = dev.name + ' ' + dev.width + 'x' + dev.height;
+  const check = (n, c, e) => { (c ? R.ok : R.fail).push('[' + tag + '] ' + n + (c ? '' : '  [' + (e === undefined ? '' : e) + ']')); };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const box = el => el.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const inViewport = el => {
+    const r = box(el);
+    return r.left >= -1 && r.top >= -1 && r.right <= vw + 1 && r.bottom <= vh + 1;
+  };
+  const size = el => Math.round(box(el).width) + 'x' + Math.round(box(el).height);
+  try {
+    /* ---- 视口与响应式布局 ---- */
+    check('视口宽度 = 设备宽度', Math.abs(vw - dev.width) <= 1, vw + ' vs ' + dev.width);
+    const mv = document.querySelector('meta[name=viewport]');
+    check('viewport 声明了 device-width 与 viewport-fit=cover',
+      !!mv && mv.content.indexOf('width=device-width') >= 0 && mv.content.indexOf('viewport-fit=cover') >= 0,
+      mv ? mv.content : 'missing');
+    const mainCS = getComputedStyle($('main'));
+    check('三栏网格改成单栏纵向流', mainCS.display === 'flex' && mainCS.flexDirection === 'column',
+      mainCS.display + ' / ' + mainCS.flexDirection);
+    const pv = box($('previewPane')), sc = box($('scalePane')), im = box($('imagePane'));
+    check('预览 / 色标 / 图片列表自上而下排列',
+      pv.top < sc.top && sc.top < im.top && pv.bottom <= sc.top + 1 && sc.bottom <= im.top + 1,
+      [pv.top, sc.top, im.top].map(Math.round).join(', '));
+    check('整页恢复纵向滚动（不再是 overflow:hidden）',
+      getComputedStyle(document.body).overflowY === 'auto'
+      && document.documentElement.scrollHeight > vh + 1,
+      getComputedStyle(document.body).overflowY + ' / ' + document.documentElement.scrollHeight + ' vs ' + vh);
+    check('没有横向溢出',
+      document.documentElement.scrollWidth <= vw + 1 && document.body.scrollWidth <= vw + 1,
+      document.documentElement.scrollWidth + ' / ' + document.body.scrollWidth + ' vs ' + vw);
+
+    /* ---- 各区块尺寸 ---- */
+    check('预览区高度约半屏且够用', box($('previewWrap')).height >= 180, size($('previewWrap')));
+    check('色标柱拿到确定高度、宽度收窄',
+      box($('legendCanvas')).height >= 200 && box($('legendCanvas')).width <= 64, size($('legendCanvas')));
+    check('节点卡片区在自己框内滚动', getComputedStyle($('nodeList')).overflowY === 'auto');
+    check('图片列表不超出视口宽度且可滚动',
+      box($('imageList')).width <= vw + 1 && getComputedStyle($('imageList')).overflowY === 'auto',
+      size($('imageList')));
+    check('日志区高度固定、可滚动',
+      Math.abs(box($('logView')).height - 132) <= 8 && getComputedStyle($('logView')).overflowY === 'auto',
+      size($('logView')));
+    check('预览画布 Fit 时把纵向滚动让给页面（touch-action: pan-y）',
+      getComputedStyle($('previewCanvas')).touchAction === 'pan-y',
+      getComputedStyle($('previewCanvas')).touchAction);
+    check('预览标题行各控件都在视口内',
+      Array.prototype.every.call($('previewPane').querySelector('.pane-head').children, inViewport),
+      Array.prototype.map.call($('previewPane').querySelector('.pane-head').children,
+        el => Math.round(box(el).right)).join(','));
+
+    /* ---- 触控目标尺寸 ---- */
+    const btns = Array.prototype.filter.call(document.querySelectorAll('#app button'),
+      b => b.offsetParent !== null && !b.classList.contains('node-swap'));
+    const tinyBtns = btns.filter(b => box(b).height < 34)
+      .map(b => (b.id || b.textContent) + ':' + Math.round(box(b).height));
+    check('可见按钮高度都 ≥ 34px（触控目标）', tinyBtns.length === 0, tinyBtns.join(' '));
+    const smallMi = [];
+    for (const id of ['btnOpenScale', 'btnManageScales', 'btnSaveScale', 'btnExportMenu']) {
+      const menu = $(id).closest('.menu');
+      closeAllMenus();
+      $(id).click();
+      await sleep(20);
+      if (!menu.classList.contains('open')) { smallMi.push(id + ' 没打开'); continue; }
+      const dd = box(menu.querySelector('.dd'));
+      if (dd.right > vw + 1 || dd.left < -1) {
+        smallMi.push(id + ' 下拉超出屏幕 ' + Math.round(dd.left) + '~' + Math.round(dd.right));
+      }
+      Array.prototype.forEach.call(menu.querySelectorAll('.dd .mi'), it => {
+        if (box(it).height < 30) smallMi.push(id + ' 菜单项太矮 ' + Math.round(box(it).height));
+      });
+    }
+    closeAllMenus();
+    check('四组下拉都能点开、不超出屏幕、菜单项够高', smallMi.length === 0, smallMi.join('; '));
+
+    /* ---- 触屏手势：捏合缩放 / 平移 / 双击 ---- */
+    resetPreviewView();
+    const cv = $('previewCanvas');
+    const c = box(cv);
+    const cx = c.left + c.width / 2, cy = c.top + c.height / 2;
+    const pev = (type, id, x, y) => cv.dispatchEvent(new PointerEvent(type, {
+      pointerId: id, pointerType: 'touch', isPrimary: id === 1, clientX: x, clientY: y,
+      bubbles: true, button: 0, buttons: (type === 'pointerup' || type === 'pointercancel') ? 0 : 1,
+    }));
+    check('手势测试起点是 Fit', state.preview.fit === true, state.preview.fit);
+    // Fit 状态下单指拖动不改视图：纵向留给页面滚动
+    const fitOx = state.preview.ox, fitOy = state.preview.oy;
+    pev('pointerdown', 1, cx, cy);
+    pev('pointermove', 1, cx + 30, cy + 30);
+    pev('pointerup', 1, cx + 30, cy + 30);
+    check('Fit 时单指拖动不平移（让页面滚）',
+      state.preview.ox === fitOx && state.preview.oy === fitOy && state.preview.fit === true,
+      (state.preview.ox - fitOx) + ', ' + (state.preview.oy - fitOy));
+
+    const fit0 = state.preview.scale;
+    const ix0 = (cx - c.left - state.preview.ox) / state.preview.scale;
+    pev('pointerdown', 1, cx - 30, cy);
+    pev('pointerdown', 2, cx + 30, cy);
+    pev('pointermove', 1, cx - 90, cy);
+    pev('pointermove', 2, cx + 90, cy);
+    check('双指张开 = 放大并退出 Fit',
+      state.preview.fit === false && state.preview.scale > fit0 * 1.5,
+      fit0.toFixed(3) + ' → ' + state.preview.scale.toFixed(3));
+    const ix1 = (cx - c.left - state.preview.ox) / state.preview.scale;
+    check('捏合以两指中点为锚点（中点下的像素不动）', Math.abs(ix1 - ix0) < 1,
+      ix0.toFixed(2) + ' vs ' + ix1.toFixed(2));
+    pev('pointerup', 1, cx - 90, cy);
+    pev('pointerup', 2, cx + 90, cy);
+    check('双指松开后不再处于拖动状态', state.panning === false, state.panning);
+    check('放大后画布接管手势（touch-action: none）',
+      getComputedStyle($('previewCanvas')).touchAction === 'none',
+      getComputedStyle($('previewCanvas')).touchAction);
+
+    const ox0 = state.preview.ox, oy0 = state.preview.oy;
+    pev('pointerdown', 1, cx, cy);
+    pev('pointermove', 1, cx + 40, cy + 24);
+    pev('pointerup', 1, cx + 40, cy + 24);
+    check('单指拖动 = 平移', Math.abs(state.preview.ox - (ox0 + 40)) < 0.6
+      && Math.abs(state.preview.oy - (oy0 + 24)) < 0.6,
+      (state.preview.ox - ox0).toFixed(1) + ', ' + (state.preview.oy - oy0).toFixed(1));
+
+    const tap = (x, y) => { pev('pointerdown', 9, x, y); pev('pointerup', 9, x, y); };
+    resetPreviewView();
+    tap(cx, cy); tap(cx, cy);
+    check('双击放大到 2.5 倍 Fit',
+      state.preview.fit === false && Math.abs(state.preview.scale - fit0 * 2.5) < 1e-6,
+      state.preview.scale.toFixed(3) + ' vs ' + (fit0 * 2.5).toFixed(3));
+    tap(cx, cy); tap(cx, cy);
+    check('再双击回到 Fit',
+      state.preview.fit === true && Math.abs(state.preview.scale - fit0) < 1e-6,
+      state.preview.fit + ' / ' + state.preview.scale.toFixed(3));
+    check('回到 Fit 后纵向滚动又交给页面',
+      getComputedStyle($('previewCanvas')).touchAction === 'pan-y',
+      getComputedStyle($('previewCanvas')).touchAction);
+
+    /* ---- 弹窗适配 ---- */
+    editNode(state.scale.nodes[state.scale.nodes.length - 1].uid);
+    await sleep(150);
+    check('节点编辑对话框在视口内', $('nodeDialog').open === true && inViewport($('nodeDialog')),
+      size($('nodeDialog')));
+    $('nodeDlgCancel').click();
+    await sleep(100);
+
+    $('btnHelp').click();
+    await sleep(250);
+    check('使用说明对话框在视口内', $('helpDialog').open === true && inViewport($('helpDialog')),
+      size($('helpDialog')));
+    check('说明目录改成上方一栏（不再左右分栏）',
+      getComputedStyle(document.querySelector('.help-wrap')).flexDirection === 'column',
+      getComputedStyle(document.querySelector('.help-wrap')).flexDirection);
+    check('说明正文仍有可读高度且能滚动',
+      box($('helpDoc')).height >= 100 && box($('helpDoc')).width >= 200
+      && getComputedStyle($('helpDoc')).overflowY === 'auto',
+      size($('helpDoc')));
+    $('helpClose').click();
+    await sleep(120);
+    check('帮助对话框可正常关闭', $('helpDialog').open === false);
+
+    openScaleLibraryDialog(sortScaleRecords(readScaleStore()));
+    await sleep(200);
+    check('色标库对话框在视口内', $('myScalesDialog').open === true && inViewport($('myScalesDialog')),
+      size($('myScalesDialog')));
+    $('myScalesCancel').click();
+    await sleep(120);
+
+    /* ---- 手机专属细节 ---- */
+    if (dev.width <= 560) {
+      check('输入框字号 ≥ 16px（iOS 聚焦不放大整页）',
+        parseFloat(getComputedStyle($('imageRangeUpper')).fontSize) >= 16,
+        getComputedStyle($('imageRangeUpper')).fontSize);
+      check('预览标题行允许换行（图片信息独占一行）',
+        box($('previewInfo')).width >= vw * 0.7,
+        Math.round(box($('previewInfo')).width) + ' vs ' + vw);
+      check('正文基准字号放大到 14px',
+        getComputedStyle(document.body).fontSize === '14px', getComputedStyle(document.body).fontSize);
+    }
+    check('移动端全程无未捕获错误', !window.__err, window.__err);
+  } catch (e) {
+    R.fail.push('[' + tag + '] 测试过程抛出异常 :: ' + (e && e.stack ? e.stack.split('\\n')[0] : e));
+  }
+  return R;
+};
+
+/** 取消设备模拟后，确认桌面三栏布局原样回来了 */
+window.__checkDesktopRestore = function () {
+  const R = { ok: [], fail: [] };
+  const check = (n, c, e) => { (c ? R.ok : R.fail).push('[恢复桌面] ' + n + (c ? '' : '  [' + (e === undefined ? '' : e) + ']')); };
+  const cs = getComputedStyle($('main'));
+  check('回到三栏网格布局',
+    cs.display === 'grid' && cs.gridTemplateColumns.split(' ').length === 3,
+    cs.display + ' / ' + cs.gridTemplateColumns);
+  const rp = $('previewPane').getBoundingClientRect();
+  const rs = $('scalePane').getBoundingClientRect();
+  const ri = $('imagePane').getBoundingClientRect();
+  check('三块恢复成「预览 | 色标 | 图片」左到右排列',
+    rp.right <= rs.left + 1 && rs.right <= ri.left + 1,
+    [rp.right, rs.left, rs.right, ri.left].map(Math.round).join(', '));
+  check('页面不再整页滚动（恢复 overflow:hidden）',
+    getComputedStyle(document.body).overflowY === 'hidden', getComputedStyle(document.body).overflowY);
+  check('图片列表回到最右侧一栏', ri.left > rs.left);
+  return R;
+};
 </script>
 `;
 
-const testHtml = html.replace('</body>', headInject + testInject + '</body>');
+// 临时页面放在 .test_tmp/ 下，而预置配置在 <项目>/PreSet/ —— 用 <base> 把页面的
+// 基准路径指回 index.html 所在目录，这样「相对 index.html 的 PreSet/manifest.js」
+// 与双击打开时完全一致（app 用 document.baseURI 解析清单路径）。
+const projectDirUrl = 'file:///' + path.dirname(htmlPath).replace(/\\/g, '/') + '/';
+const testHtml = html
+  .replace('<head>', '<head>\n<base href="' + projectDirUrl + '">')
+  .replace('</body>', headInject + testInject + '</body>');
 const testPath = path.join(outDir, 'browser_test.html');
 fs.writeFileSync(testPath, testHtml, 'utf8');
 
@@ -1776,6 +2044,21 @@ if (shotMenu.result && shotMenu.result.data) {
 }
 await send('Runtime.evaluate', { expression: 'closeAllMenus()', returnByValue: false });
 
+// 再截一张「使用说明」弹窗（桌面是左右分栏，手机上会变成上下分栏）
+await send('Runtime.evaluate', {
+  expression: "document.getElementById('btnHelp').click()", returnByValue: false,
+});
+await sleep(500);
+const shotHelpDesk = await send('Page.captureScreenshot', { format: 'png' });
+if (shotHelpDesk.result && shotHelpDesk.result.data) {
+  fs.writeFileSync(path.join(outDir, 'browser_shot_help.png'),
+    Buffer.from(shotHelpDesk.result.data, 'base64'));
+}
+await send('Runtime.evaluate', {
+  expression: "document.getElementById('helpClose').click()", returnByValue: false,
+});
+await sleep(250);
+
 // 再截一张「我的色标」弹窗
 await send('Runtime.evaluate', {
   expression: 'window.__openMyScalesForShot()', awaitPromise: false, returnByValue: false,
@@ -1821,6 +2104,81 @@ if (exportedJpgValue) {
   console.log('浏览器导出物已保存：browser_out.jpg（' + exportedJpgValue.split(',').length + ' 字节）');
 }
 
+// ------------------------------------------------- 移动端适配（CDP 设备模拟）
+const mobileResults = [];
+for (const dev of [
+  { name: '手机', tag: 'mobile', width: 390, height: 844, dsf: 3 },
+  { name: '手机横屏', tag: 'mobile-landscape', width: 844, height: 390, dsf: 3 },
+  { name: '平板竖屏', tag: 'tablet', width: 768, height: 1024, dsf: 2 },
+]) {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: dev.width, height: dev.height, deviceScaleFactor: dev.dsf, mobile: true,
+  });
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  await sleep(600);
+  const res = await send('Runtime.evaluate', {
+    expression: 'window.__runMobileTest(' + JSON.stringify(dev) + ')',
+    awaitPromise: true, returnByValue: true,
+  });
+  if (res.result && res.result.exceptionDetails) {
+    console.error('移动端测试执行失败：', JSON.stringify(res.result.exceptionDetails).slice(0, 1200));
+  }
+  const val = res.result && res.result.result && res.result.result.value;
+  if (val) mobileResults.push(val);
+
+  const fileTag = dev.tag;
+  const shotView = await send('Page.captureScreenshot', { format: 'png' });
+  if (shotView.result && shotView.result.data) {
+    fs.writeFileSync(path.join(outDir, 'browser_shot_' + fileTag + '.png'),
+      Buffer.from(shotView.result.data, 'base64'));
+  }
+  // 手机上再补两张弹窗截图，便于核对弹窗适配
+  if (fileTag === 'mobile') {
+    await send('Runtime.evaluate', { expression: "document.getElementById('btnHelp').click()" });
+    await sleep(450);
+    const shotHelp = await send('Page.captureScreenshot', { format: 'png' });
+    if (shotHelp.result && shotHelp.result.data) {
+      fs.writeFileSync(path.join(outDir, 'browser_shot_mobile_help.png'),
+        Buffer.from(shotHelp.result.data, 'base64'));
+    }
+    await send('Runtime.evaluate', { expression: "document.getElementById('helpClose').click()" });
+    await sleep(250);
+    await send('Runtime.evaluate', {
+      expression: 'editNode(state.scale.nodes[state.scale.nodes.length - 1].uid)',
+    });
+    await sleep(450);
+    const shotNode = await send('Page.captureScreenshot', { format: 'png' });
+    if (shotNode.result && shotNode.result.data) {
+      fs.writeFileSync(path.join(outDir, 'browser_shot_mobile_node.png'),
+        Buffer.from(shotNode.result.data, 'base64'));
+    }
+    await send('Runtime.evaluate', { expression: "document.getElementById('nodeDlgCancel').click()" });
+    await sleep(250);
+  }
+  const metrics = await send('Page.getLayoutMetrics');
+  const content = metrics.result && metrics.result.cssContentSize;
+  if (content && content.height > dev.height + 1) {
+    const shotFull = await send('Page.captureScreenshot', {
+      format: 'png', captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: content.width, height: Math.min(content.height, 6000), scale: 1 },
+    });
+    if (shotFull.result && shotFull.result.data) {
+      fs.writeFileSync(path.join(outDir, 'browser_shot_' + fileTag + '_full.png'),
+        Buffer.from(shotFull.result.data, 'base64'));
+      console.log('移动端整页截图：browser_shot_' + fileTag + '_full.png（'
+        + Math.round(content.width) + 'x' + Math.round(content.height) + '）');
+    }
+  }
+}
+await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+await send('Emulation.clearDeviceMetricsOverride');
+await sleep(500);
+const restoreRes = await send('Runtime.evaluate', {
+  expression: 'window.__checkDesktopRestore()', returnByValue: true,
+});
+const restoreVal = restoreRes.result && restoreRes.result.result && restoreRes.result.result.value;
+if (restoreVal) mobileResults.push(restoreVal);
+
 ws.close();
 chrome.kill();
 
@@ -1829,8 +2187,13 @@ if (!value) {
   console.error('未取到测试结果，原始返回：', JSON.stringify(evaluated).slice(0, 1500));
   process.exit(1);
 }
-for (const n of value.ok) console.log('  [OK]   ' + n);
-for (const f of value.fail) console.log('  [FAIL] ' + f);
-console.log('\nHTML 版浏览器自检：通过 ' + value.ok.length + ' 项，失败 ' + value.fail.length + ' 项。');
-console.log('截图：' + path.join(outDir, 'browser_shot.png'));
-process.exit(value.fail.length ? 1 : 0);
+const allOk = value.ok.concat(...mobileResults.map(r => r.ok));
+const allFail = value.fail.concat(...mobileResults.map(r => r.fail));
+for (const n of allOk) console.log('  [OK]   ' + n);
+for (const f of allFail) console.log('  [FAIL] ' + f);
+console.log('\nHTML 版浏览器自检：通过 ' + allOk.length + ' 项，失败 ' + allFail.length + ' 项。');
+console.log('截图：' + path.join(outDir, 'browser_shot.png')
+  + '\n      ' + path.join(outDir, 'browser_shot_mobile.png')
+  + '\n      ' + path.join(outDir, 'browser_shot_mobile-landscape.png')
+  + '\n      ' + path.join(outDir, 'browser_shot_tablet.png'));
+process.exit(allFail.length ? 1 : 0);

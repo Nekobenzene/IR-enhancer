@@ -1,7 +1,0 @@
-{
-  "name": "BW",
-  "nodes": [
-    { "temperature_k": 323.15, "color": "#000000", "pinned": true },
-    { "temperature_k": 188.15, "color": "#FFFFFF" }
-  ]
-}

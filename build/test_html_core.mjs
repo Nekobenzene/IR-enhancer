@@ -385,10 +385,73 @@ export async function run() {
       /^\\d{8} \\d{2}:\\d{2}:\\d{2}$/.test(formatCreatedTime(1499999999999)),
       formatCreatedTime(1499999999999));
 
-    /* 8b. 内置「预设色标」（数据来自项目里的 PreSet/*.json） */
+    /* 8b. 「预设色标」= 配置文件驱动（PreSet/manifest.js + 一预设一文件），
+           index.html 里不再内嵌任何预置数据 */
     check('原来写死的内置 BD 色标已彻底移除',
       typeof ensureBuiltinScales === 'undefined' && typeof BUILTIN_BD_SCALE === 'undefined'
       && typeof BUILTIN_BD_CREATED === 'undefined');
+
+    const presetDir = path.join(FIXDIR, '..', 'PreSet');
+    /** 在 Node 里按浏览器的方式「执行」一个配置文件：它只依赖 window */
+    const readConfig = file => {
+      const scope = {};
+      new Function('window', fs.readFileSync(path.join(presetDir, file), 'utf8'))(scope);
+      return scope;
+    };
+
+    const rawHtml2 = fs.readFileSync(HTMLPATH, 'utf8');
+    check('index.html 里不再内嵌预置数据',
+      !/const PRESET_SCALES = \\[/.test(rawHtml2) && /let PRESET_SCALES = \\[\\];/.test(rawHtml2),
+      (rawHtml2.match(/const PRESET_SCALES[^\\n]*/) || ['无'])[0]);
+    check('预置清单常量指向 PreSet/manifest.js',
+      PRESET_MANIFEST === 'PreSet/manifest.js', PRESET_MANIFEST);
+    check('预置由 <script> 标签载入（file:// 下 fetch / XHR 读不到本地文件）',
+      typeof loadScriptTag === 'function' && typeof loadPresets === 'function'
+      && typeof ensurePresetsLoaded === 'function'
+      && !/fetch\\(|XMLHttpRequest/.test(loadPresets.toString()));
+    check('载入是幂等的（缓存同一个 Promise，不会重复载入）',
+      /if \\(presetLoadTask\\) return presetLoadTask;/.test(loadPresets.toString())
+      && /return presetLoadTask;/.test(loadPresets.toString()));
+
+    const presetFiles = readConfig('manifest.js').IR_PRESET_FILES;
+    check('清单里是一个非空的文件数组',
+      Array.isArray(presetFiles) && presetFiles.length > 0, JSON.stringify(presetFiles || null));
+    const diskFiles = fs.readdirSync(presetDir).filter(f => /\\.js$/i.test(f) && f !== 'manifest.js');
+    check('清单与目录里的预置文件一一对应（无遗漏、无孤儿）',
+      Array.isArray(presetFiles) && presetFiles.length === diskFiles.length
+      && diskFiles.every(f => presetFiles.indexOf(f) >= 0),
+      (presetFiles || []).join(',') + '  vs  ' + diskFiles.join(','));
+
+    // 每个文件：正好一条预置、文件名 = name、不带 created、能通过正式校验
+    const configPresets = [];
+    let onePerFile = '', configBad = '';
+    (presetFiles || []).forEach(f => {
+      let entries = [];
+      try { entries = readConfig(f).IR_PRESETS || []; }
+      catch (e) { configBad = f + '：载入失败 ' + e.message; return; }
+      if (!Array.isArray(entries) || entries.length !== 1) {
+        onePerFile = f + '：应当正好 1 条预置，实际 ' + (entries && entries.length);
+        return;
+      }
+      const raw = entries[0];
+      if (f.replace(/\\.js$/i, '') !== raw.name) {
+        onePerFile = f + '：文件名与 name（' + raw.name + '）不一致';
+        return;
+      }
+      if (raw.created !== undefined) { onePerFile = f + '：预置里不应该写 created'; return; }
+      try { configPresets.push(presetFromConfig(raw)); }
+      catch (e) { configBad = f + '：' + e.message; }
+    });
+    check('每个预置文件正好一条预置、文件名 = name、不带 created', onePerFile === '', onePerFile);
+    check('每条预置都能通过配置校验（温度 / 颜色 / 同位置不超过 2 个）', configBad === '', configBad);
+    check('清单里列出的文件都提供了数据',
+      configPresets.length === (presetFiles || []).length,
+      configPresets.length + ' / ' + (presetFiles || []).length);
+
+    // 浏览器里由 loadPresets() 把配置填进 PRESET_SCALES；Node 里直接注入同一份结果
+    PRESET_SCALES = configPresets;
+    check('注入后预设条数 = 配置条数',
+      PRESET_SCALES.length === configPresets.length, String(PRESET_SCALES.length));
     check('预设至少 2 条（空白 + 至少一套色阶）',
       PRESET_SCALES.length >= 2, String(PRESET_SCALES.length));
     check('「空白」排在第一位且只有一个白色保留节点',
@@ -401,43 +464,10 @@ export async function run() {
     check('预设名字互不重复',
       new Set(PRESET_SCALES.map(p => p.name)).size === PRESET_SCALES.length,
       PRESET_SCALES.map(p => p.name).join(','));
-
-    // 每一条预置都要能通过正式校验，并且与 PreSet/ 下的 JSON 文件逐字段一致
-    // （文件名与预置名不一定相同，例如 IR-RBTOP.json 里写的是 RBTOP，所以按 name 配对）
-    const presetDir = path.join(FIXDIR, '..', 'PreSet');
-    let presetBad = '', presetMismatch = '';
-    let presetFiles = [];
-    try { presetFiles = fs.readdirSync(presetDir).filter(f => /\\.json$/i.test(f)); }
-    catch (e) { presetMismatch = '读不到目录 ' + presetDir; }
-    check('PreSet 目录里的文件数与预置条数一致',
-      presetFiles.length === PRESET_SCALES.length,
-      presetFiles.length + ' vs ' + PRESET_SCALES.length);
-    PRESET_SCALES.forEach(p => {
-      try { parseScaleRecord({ name: p.name, nodes: p.nodes }); }
-      catch (e) { presetBad = p.name + '：' + e.message; }
-    });
-    presetFiles.forEach(f => {
-      let raw = null;
-      try { raw = JSON.parse(fs.readFileSync(path.join(presetDir, f), 'utf8')); }
-      catch (e) { presetMismatch = f + '：解析失败 ' + e.message; return; }
-      const mine = PRESET_SCALES.filter(p => p.name === raw.name)[0];
-      if (!mine) { presetMismatch = f + '：内嵌预置里没有名为「' + raw.name + '」的条目'; return; }
-      if (raw.nodes.length !== mine.nodes.length) {
-        presetMismatch = f + '：节点数 ' + mine.nodes.length + ' vs 文件 ' + raw.nodes.length; return;
-      }
-      for (let i = 0; i < raw.nodes.length; i++) {
-        const a = raw.nodes[i], b = mine.nodes[i];
-        if (String(a.color).toUpperCase() !== String(b.color).toUpperCase()
-          || Math.abs(Number(a.temperature_k) - Number(b.temperature_k)) > 1e-9
-          || (a.pinned === true) !== (b.pinned === true)) {
-          presetMismatch = f + ' 第 ' + (i + 1) + ' 个节点与内嵌预置不一致'; return;
-        }
-      }
-    });
-    check('每条预置都能通过配置校验', presetBad === '', presetBad);
-    check('内嵌预置与 PreSet/*.json 逐节点一致', presetMismatch === '', presetMismatch);
-    // 「空白」必须排第一
-    check('PreSet 里的空白排在列表第一位', PRESET_SCALES[0].name === '空白');
+    check('规范化后颜色都是 #RRGGBB 大写',
+      PRESET_SCALES.every(p => p.nodes.every(n => /^#[0-9A-F]{6}$/.test(n.color))));
+    check('规范化后温度都对齐到 0.01 K',
+      PRESET_SCALES.every(p => p.nodes.every(n => approx(n.temperature_k, roundHalfEven(n.temperature_k)))));
 
     // 弹窗用的包装：内部行号用负数，保证两条预置不会撞 key
     const rows = presetRecords();
@@ -448,6 +478,10 @@ export async function run() {
       rows.map(r => r.created).join(','));
     check('预设行不携带 created 之外的假数据',
       rows.every(r => r.name && Array.isArray(r.nodes)));
+    check('按行号取回的预置与列表一一对应',
+      presetByRow(PRESET_ROW_BASE) === PRESET_SCALES[0]
+      && presetByRow(PRESET_ROW_BASE - 1) === PRESET_SCALES[1]
+      && presetByRow(1) === null && presetByRow(-1) === null);
 
     // 导入时补 created（按导入时刻）
     const bdPreset = presetByName('IR-BD-ex');
@@ -486,9 +520,9 @@ export async function run() {
       === scaleToText(scaleFromObject(JSON.parse(scaleToText(presetToScale(bdPreset, 1700000000000))))));
     check('导入「空白」后整幅纯白的取色',
       new ColorMapper(presetToScale(PRESET_SCALES[0]).nodes).colorAtKelvin(200).join() === '255,255,255');
-    check('「BW」预置 = 50°C 黑 → -85°C 白',
+    check('「IR-BW」预置 = 50°C 黑 → -85°C 白',
       (() => {
-        const bw = presetToScale(presetByName('BW')).nodes;
+        const bw = presetToScale(presetByName('IR-BW')).nodes;
         return bw.length === 2 && bw[0].rgb.join() === '0,0,0' && bw[1].rgb.join() === '255,255,255'
           && approx(bw[0].kelvin, DEF_K_MAX) && approx(bw[1].kelvin, DEF_K_MIN);
       })());
