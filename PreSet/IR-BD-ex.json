@@ -1,0 +1,29 @@
+{
+  "name": "IR-BD-ex",
+  "nodes": [
+    {"temperature_k": 301.15,"color": "#000000","pinned": true},
+    {"temperature_k": 301.15,"color": "#030303"},
+    {"temperature_k": 282.15,"color": "#F7F7F7"},
+    {"temperature_k": 282.15,"color": "#6D6D6D"},
+    {"temperature_k": 242.15,"color": "#CACACA"},
+    {"temperature_k": 242.15,"color": "#3C3C3C"},
+    {"temperature_k": 231.15,"color": "#3C3C3C"},
+    {"temperature_k": 231.15,"color": "#6E6E6E"},
+    {"temperature_k": 219.15,"color": "#6E6E6E"},
+    {"temperature_k": 219.15,"color": "#A0A0A0"},
+    {"temperature_k": 209.15,"color": "#A0A0A0"},
+    {"temperature_k": 209.15,"color": "#000000"},
+    {"temperature_k": 203.15,"color": "#000000"},
+    {"temperature_k": 203.15,"color": "#FFFFFF"},
+    {"temperature_k": 197.15,"color": "#FFFFFF"},
+    {"temperature_k": 197.15,"color": "#878787"},
+    {"temperature_k": 192.15,"color": "#878787"},
+    {"temperature_k": 192.15,"color": "#555555"},
+    {"temperature_k": 188.15,"color": "#555555"},
+    {"temperature_k": 188.15,"color": "#333333"},
+    {"temperature_k": 184.15,"color": "#333333"},
+    {"temperature_k": 184.15,"color": "#1A1A1A"},
+    {"temperature_k": 180.15,"color": "#1A1A1A"},
+    {"temperature_k": 180.15,"color": "#000000"}
+  ]
+}

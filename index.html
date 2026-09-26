@@ -1,0 +1,4597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="离线单文件工具：导入红外灰度 PNG / JPG，按自定义温度上下限做连续色标增强，实时预览并单张或批量导出。">
+<title>红外灰度色标增强工具</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f6cbd'/%3E%3Crect x='6' y='6' width='7' height='20' rx='2' fill='%23ffffff'/%3E%3Crect x='18' y='6' width='8' height='9' rx='2' fill='%23ffffff' opacity='.75'/%3E%3Crect x='18' y='17' width='8' height='9' rx='2' fill='%23ffffff' opacity='.4'/%3E%3C/svg%3E">
+<style>
+  /* =====================================================================
+   * 设计系统：Fluent 2（Windows 11）浅色工具界面
+   * 单一强调色 / 单一冷灰族 / 统一圆角体系 / 统一 z-index 层级
+   * ===================================================================== */
+  :root {
+    color-scheme: light;             /* 锁死浅色：系统深色模式下控件也不变黑 */
+    /* 冷灰阶（唯一灰色族） */
+    --n-0: #ffffff;
+    --n-1: #fafbfc;
+    --n-2: #f3f5f7;
+    --n-3: #edf0f3;
+    --n-4: #e3e7eb;
+    --n-5: #d5dae0;
+    --n-6: #c3c9d0;
+    --n-7: #a5adb6;
+    --n-8: #7b838c;
+    --n-9: #5a626b;
+    --n-10: #3b4249;
+    --n-11: #24292e;
+
+    /* 文字 */
+    --text-1: var(--n-11);
+    --text-2: var(--n-9);
+    --text-3: var(--n-8);
+
+    /* 唯一强调色（Fluent brand blue，饱和度 < 80%） */
+    --accent: #0f6cbd;
+    --accent-hover: #115ea3;
+    --accent-pressed: #0e4f82;
+    --accent-soft: #e5f1fb;
+    --accent-soft-2: #cfe4f8;
+    --danger: #c42b1c;               /* Windows 经典删除红 */
+    --danger-hover: #a82214;
+    --danger-pressed: #8f1c10;
+
+    /* 描边 */
+    --stroke-1: var(--n-4);
+    --stroke-2: var(--n-5);
+    --stroke-3: var(--n-6);
+
+    /* 阴影：一律带蓝灰色调，不用纯黑 */
+    --shadow-2: 0 1px 2px rgba(16, 42, 67, .10), 0 0 2px rgba(16, 42, 67, .06);
+    --shadow-8: 0 8px 16px rgba(16, 42, 67, .14), 0 0 2px rgba(16, 42, 67, .10);
+    --shadow-16: 0 16px 32px rgba(16, 42, 67, .18), 0 0 2px rgba(16, 42, 67, .12);
+
+    /* 圆角体系（Shape Consistency Lock）：
+       控件 4px / 面板与卡片 6px / 对话框 8px，无胶囊 */
+    --r-control: 4px;
+    --r-surface: 6px;
+    --r-dialog: 8px;
+
+    /* z-index 层级 */
+    --z-swap: 2;
+    --z-menu: 100;
+    --z-dialog: 200;
+
+    --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+               "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    --font-num: "Cascadia Mono", Consolas, "SFMono-Regular", ui-monospace, monospace;
+    --ease: cubic-bezier(.33, 0, .67, 1);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0; overflow: hidden;
+    background: var(--n-2); color: var(--text-1);
+    font: 13px/1.45 var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 数字一律等宽对齐：温度读数变化时不会左右跳动 */
+  .num, #previewInfo, #logView, #progressLabel, #legendCanvas + * { font-variant-numeric: tabular-nums; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ---------------- 菜单栏 ---------------- */
+  #menubar {
+    flex: 0 0 auto; display: flex; align-items: stretch;
+    background: var(--n-1); border-bottom: 1px solid var(--stroke-1);
+    user-select: none;
+  }
+  .menu { position: relative; display: flex; }
+  .menu > .mt {
+    display: flex; align-items: center; padding: 0 12px; height: 30px;
+    cursor: default; border-radius: var(--r-control); margin: 2px;
+    transition: background-color .12s var(--ease);
+  }
+  .menu:hover > .mt, .menu.open > .mt { background: var(--accent-soft); }
+  .menu.open > .mt { background: var(--accent-soft-2); }
+  .menu .dd {
+    display: none; position: absolute; top: calc(100% + 1px); left: 0; min-width: 196px;
+    background: var(--n-0); border: 1px solid var(--stroke-1); border-radius: var(--r-surface);
+    box-shadow: var(--shadow-8); z-index: var(--z-menu); padding: 4px; margin-top: 2px;
+  }
+  .menu.open .dd { display: block; }
+  .dd .mi {
+    padding: 6px 12px; cursor: default; white-space: nowrap; border-radius: var(--r-control);
+    transition: background-color .12s var(--ease);
+  }
+  .dd .mi:hover { background: var(--accent-soft); }
+  .dd .mi:active { background: var(--accent-soft-2); }
+  .dd .mi.disabled { color: var(--text-3); }
+  .dd .mi.disabled:hover, .dd .mi.disabled:active { background: none; }
+  .dd .sep { height: 1px; background: var(--stroke-1); margin: 4px 6px; }
+
+  /* 面板里的下拉按钮组（打开色标 / 保存色标 / 导出图片） */
+  .dropbtn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    width: 100%; padding: 4px 12px; white-space: nowrap;
+  }
+  .menu.open > .dropbtn, .menu.open > .mt {
+    background: var(--accent-soft); border-color: var(--accent);
+  }
+  .caret {
+    width: 5px; height: 5px; flex: 0 0 auto; margin-top: -2px;
+    border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+  }
+  .btn-row { display: flex; gap: 6px; }
+  .btn-row > .menu { flex: 1 1 0; min-width: 0; }
+  .row > .menu.grow { flex: 1 1 auto; min-width: 0; }
+  .dd.dd-block { width: 100%; min-width: 0; }
+  .menubar-btn {
+    margin: 2px 6px; padding: 3px 12px; background: transparent; border-color: transparent;
+    color: var(--text-2);
+  }
+  .menubar-btn:hover:not(:disabled) { background: var(--accent-soft); border-color: transparent; }
+  #menubar .grow { flex: 1 1 auto; }
+
+  /* ---------------- 主区域 ---------------- */
+  #main {
+    flex: 1 1 auto; min-height: 0; display: grid;
+    grid-template-columns: 1fr 340px 270px; gap: 8px; padding: 8px 8px 6px;
+  }
+  #previewPane, #scalePane, #imagePane {
+    display: flex; flex-direction: column; min-height: 0; gap: 6px;
+  }
+  .pane-head {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    min-height: 24px;
+  }
+  .muted { color: var(--text-2); }
+  .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 面板小标题：工具里的结构性标签，比浮动灰字更有归属感 */
+  .pane-title {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; color: var(--text-2);
+    letter-spacing: .01em;
+  }
+  .pane-title::before {
+    content: ""; width: 3px; height: 12px; border-radius: 2px; background: var(--accent);
+    opacity: .85;
+  }
+  .pane-rule { height: 1px; background: var(--stroke-1); }
+  .pane-head label {
+    display: flex; align-items: center; gap: 5px; color: var(--text-2); cursor: pointer;
+  }
+  .pane-head label:hover { color: var(--text-1); }
+  /* 图片温度范围：放在预览标题与「重置视图」之间 */
+  .range-inline {
+    display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
+    color: var(--text-2); white-space: nowrap;
+  }
+  .range-inline input {
+    width: 68px; text-align: right; font-variant-numeric: tabular-nums;
+  }
+
+  /* 预览：透明区域显示棋盘格，直观表达 Alpha */
+  #previewWrap {
+    flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden;
+    background-color: var(--n-1);
+    border: 1px solid var(--stroke-1); border-radius: var(--r-surface);
+    box-shadow: inset 0 1px 2px rgba(16, 42, 67, .06);
+  }
+  #previewWrap.checker {
+    background-color: var(--n-0);
+    background-image:
+      linear-gradient(45deg, var(--n-3) 25%, transparent 25%, transparent 75%, var(--n-3) 75%),
+      linear-gradient(45deg, var(--n-3) 25%, transparent 25%, transparent 75%, var(--n-3) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 8px 8px;
+  }
+  #previewWrap.loading::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(100deg, transparent 20%, rgba(15, 108, 189, .10) 50%, transparent 80%);
+    background-size: 220% 100%;
+    animation: sweep 1.15s linear infinite;
+  }
+  @keyframes sweep {
+    from { background-position: 140% 0; }
+    to { background-position: -40% 0; }
+  }
+  #previewCanvas { display: block; width: 100%; height: 100%; }
+
+  /* 温度上下限以下：左边更长的色标柱，右边节点卡片，两列并排 */
+  #scaleBody {
+    flex: 1 1 auto; min-height: 0;
+    display: grid; grid-template-columns: 64px 1fr; gap: 8px;
+  }
+  #legendWrap { min-height: 0; position: relative; }
+  /* 色标柱直接落在灰色背景上，不再套一圈白底 */
+  #legendCanvas { display: block; width: 100%; height: 100%; }
+  #nodeColumn { display: flex; flex-direction: column; min-height: 0; gap: 6px; }
+
+  /* ---------------- 表单控件 ---------------- */
+  .row { display: flex; align-items: center; gap: 6px; }
+  .row > label { flex: 0 0 auto; color: var(--text-2); }
+  .row > .grow { flex: 1 1 auto; min-width: 0; }
+  input[type=text], input[type=number], select {
+    font: inherit; padding: 3px 6px; color: var(--text-1);
+    border: 1px solid var(--stroke-2); border-radius: var(--r-control);
+    background: var(--n-0); transition: border-color .12s var(--ease), box-shadow .12s var(--ease);
+  }
+  input[type=text]:hover:not(:disabled), input[type=number]:hover:not(:disabled),
+  select:hover:not(:disabled) { border-color: var(--stroke-3); }
+  input[type=text]:focus, input[type=number]:focus, select:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  input:disabled, select:disabled { background: var(--n-2); color: var(--text-3); }
+  input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0 2px 0 0; }
+  #scaleName, #imageRangeUpper, #imageRangeLower, .hex-input, .rgb-input {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 按钮三档：默认（次级）/ 主操作 / 卡片内的轻量按钮 */
+  button {
+    font: inherit; padding: 4px 12px; color: var(--text-1);
+    border: 1px solid var(--stroke-2); border-radius: var(--r-control);
+    background: var(--n-0); cursor: default;
+    transition: background-color .12s var(--ease), border-color .12s var(--ease),
+                box-shadow .12s var(--ease), transform .06s var(--ease);
+  }
+  button:hover:not(:disabled) { background: var(--n-2); border-color: var(--stroke-3); }
+  button:active:not(:disabled) { background: var(--n-3); transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button:disabled { color: var(--text-3); background: var(--n-2); border-color: var(--stroke-1); }
+  /* 每种语境只允许一个主操作；「确定」类按钮可用时为 Windows 经典蓝 */
+  .btn-primary {
+    color: #fff; background: var(--accent); border-color: var(--accent);
+    box-shadow: var(--shadow-2);
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn-primary:active:not(:disabled) { background: var(--accent-pressed); border-color: var(--accent-pressed); }
+  /* 「删除」类按钮可用时为 Windows 经典红 */
+  .btn-danger {
+    color: #fff; background: var(--danger); border-color: var(--danger);
+    box-shadow: var(--shadow-2);
+  }
+  .btn-danger:hover:not(:disabled) { background: var(--danger-hover); border-color: var(--danger-hover); }
+  .btn-danger:active:not(:disabled) { background: var(--danger-pressed); border-color: var(--danger-pressed); }
+  /* 禁用时统一回到经典浅灰 */
+  .btn-primary:disabled, .btn-danger:disabled {
+    color: var(--text-3); background: var(--n-2); border-color: var(--stroke-1); box-shadow: none;
+  }
+  .selbtns { display: none; }
+  .selbtns.show { display: flex; gap: 6px; }
+  .hidden { display: none !important; }
+  /* 批量导出期间：被锁定的区域整体降一级，明确「现在不能操作」 */
+  #app.busy #nodeList, #app.busy #imageList, #app.busy #previewWrap {
+    opacity: .55; filter: saturate(.6);
+  }
+  #app.busy #nodeList, #app.busy #imageList, #app.busy #previewWrap {
+    transition: opacity .15s var(--ease);
+  }
+
+  /* ---------------- 节点列表 ---------------- */
+  #nodeList {
+    flex: 1 1 auto; min-height: 0; overflow: auto;
+    background: var(--n-0); border: 1px solid var(--stroke-1); border-radius: var(--r-surface);
+    padding: 2px;
+  }
+  /* 密度 7：不用「边框+白底+圆角」的通用卡片，改成扁平行 + 发丝线 */
+  .node-card {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-bottom: 1px solid var(--n-3); cursor: pointer;
+    transition: background-color .12s var(--ease);
+  }
+  .node-card:last-child { border-bottom: none; }
+  .node-card:hover { background: var(--n-2); }
+  .node-card:active { background: var(--n-3); }
+  .node-card .swatch {
+    width: 20px; height: 20px; flex: 0 0 auto;
+    border: 1px solid var(--stroke-3); border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .55);
+  }
+  .node-card .pos {
+    flex: 1 1 auto; min-width: 0; font-variant-numeric: tabular-nums;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .node-card .tag { color: var(--text-3); font-size: 11px; flex: 0 0 auto; }
+  .node-card input[type=checkbox] { flex: 0 0 auto; }
+
+  /* 温度相同的两个节点：共边框并置成一个单元，双箭头骑在分界线上 */
+  .node-group {
+    position: relative; margin: 4px 2px; background: var(--n-0);
+    border: 1px solid var(--stroke-2); border-radius: var(--r-surface);
+    overflow: hidden; box-shadow: var(--shadow-2);
+  }
+  .node-group .node-card { border-bottom: none; }
+  .node-group .node-card + .node-card { border-top: 1px solid var(--stroke-2); }
+  .node-group .node-card:hover { background: var(--accent-soft); }
+  .node-group .node-swap {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 22px; height: 22px; margin: 0; padding: 0; z-index: var(--z-swap);
+    display: flex; align-items: center; justify-content: center; color: var(--text-2);
+    border: 1px solid var(--stroke-3); border-radius: var(--r-control);
+    background: var(--n-0); box-shadow: var(--shadow-2); line-height: 0; cursor: pointer;
+  }
+  .node-group .node-swap:hover {
+    background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+  }
+  .node-group .node-swap:active { transform: translate(-50%, -50%) translateY(1px); }
+  .node-group .node-swap svg { display: block; }
+
+  /* ---------------- 图片列表 ---------------- */
+  #imageList {
+    flex: 1 1 auto; min-height: 0; overflow: auto;
+    background: var(--n-0); border: 1px solid var(--stroke-1); border-radius: var(--r-surface);
+  }
+  .img-row {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px; cursor: pointer;
+    border-bottom: 1px solid var(--n-3); border-left: 3px solid transparent;
+    transition: background-color .12s var(--ease), border-color .12s var(--ease);
+  }
+  .img-row:last-child { border-bottom: none; }
+  .img-row:hover { background: var(--n-2); }
+  .img-row:active { background: var(--n-3); }
+  .img-row.current { background: var(--accent-soft); border-left-color: var(--accent); }
+  .img-row.current .name { font-weight: 600; }
+  .img-row .thumbBox {
+    flex: 0 0 auto; width: 76px; height: 56px; display: flex;
+    align-items: center; justify-content: center; overflow: hidden;
+    background: var(--n-1); border: 1px solid var(--stroke-1); border-radius: var(--r-control);
+  }
+  .img-row .thumbBox canvas { max-width: 74px; max-height: 54px; object-fit: contain; }
+  .img-row .name {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .img-row input[type=checkbox] { flex: 0 0 auto; }
+
+  /* 空状态：说明怎么开始，而不是丢一行灰字 */
+  .empty-hint {
+    margin: 10px; padding: 20px 12px; text-align: center;
+    border: 1px dashed var(--stroke-2); border-radius: var(--r-surface);
+    background: var(--n-1); color: var(--text-2);
+  }
+  .empty-hint .eh-art {
+    width: 40px; height: 30px; margin: 0 auto 10px;
+    border: 1.5px solid var(--stroke-3); border-radius: 3px;
+    background:
+      linear-gradient(135deg, transparent 46%, var(--stroke-3) 46%, var(--stroke-3) 54%, transparent 54%),
+      linear-gradient(45deg, transparent 60%, var(--accent-soft-2) 60%);
+  }
+  .empty-hint .eh-title { font-weight: 600; color: var(--text-1); }
+  .empty-hint .eh-sub { margin-top: 4px; font-size: 12px; color: var(--text-3); }
+
+  /* ---------------- 进度 / 日志 ---------------- */
+  #progressPanel {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 2px 12px 6px;
+  }
+  #progressOuter {
+    flex: 0 0 260px; height: 8px; background: var(--n-4);
+    border-radius: 4px; overflow: hidden;
+  }
+  #progressInner {
+    height: 100%; width: 0%; border-radius: 4px; background: var(--accent);
+    transition: width .18s var(--ease);
+  }
+  #progressLabel {
+    flex: 1 1 auto; color: var(--text-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  #logPane {
+    flex: 0 0 auto; height: 168px; padding: 0 8px 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #logView {
+    flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px 8px;
+    background: var(--n-0); border: 1px solid var(--stroke-1); border-radius: var(--r-surface);
+    font: 12px/1.5 var(--font-num); white-space: pre-wrap; word-break: break-all;
+    color: var(--text-2);
+  }
+
+  /* ---------------- 对话框 ---------------- */
+  dialog {
+    border: 1px solid var(--stroke-2); border-radius: var(--r-dialog); padding: 0;
+    background: var(--n-1); color: inherit; font: inherit; max-width: 92vw;
+    box-shadow: var(--shadow-16);
+  }
+  dialog::backdrop { background: rgba(16, 42, 67, .22); }
+  .dlg-body { padding: 16px 18px 12px; display: flex; flex-direction: column; gap: 12px; }
+  /* 表单：标签在上、帮助文字在下，不用占位符当标签 */
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field > label { font-size: 12px; color: var(--text-2); }
+  .field > input[type=text] { width: 100%; }
+  .dlg-foot {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: 10px 18px 14px; border-top: 1px solid var(--stroke-1);
+  }
+  .dlg-foot button { min-width: 80px; white-space: nowrap; }
+  .dlg-foot-split { justify-content: space-between; }
+  .dlg-title { font-size: 14px; font-weight: 600; }
+  #myScalesDialog { width: 480px; }
+  .dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .dlg-tools { display: flex; align-items: center; gap: 10px; }
+  .dlg-tools label {
+    display: flex; align-items: center; gap: 5px; color: var(--text-2); cursor: pointer;
+  }
+  .dlg-tools label:hover { color: var(--text-1); }
+
+  /* 我的色标：每条 = 横向 legend + 名称 + 创建时间 */
+  .my-scales {
+    max-height: 52vh; overflow: auto; display: flex; flex-direction: column; gap: 8px;
+    min-height: 120px;
+  }
+  .scale-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 10px 12px; background: var(--n-0);
+    border: 1px solid var(--stroke-2); border-radius: var(--r-surface);
+    cursor: pointer; transition: background-color .12s var(--ease), border-color .12s var(--ease);
+  }
+  .scale-item > input[type=checkbox] { margin-top: 4px; flex: 0 0 auto; }
+  .scale-item .si-body { flex: 1 1 auto; min-width: 0; }
+  .scale-item:hover { background: var(--accent-soft); border-color: var(--accent); }
+  .scale-item.selected {
+    background: var(--accent-soft); border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .scale-item canvas { display: block; width: 100%; height: 22px; }
+  .scale-item .si-name {
+    margin-top: 8px; font-weight: 600; color: var(--text-1);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .scale-item .si-time { margin-top: 2px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .my-scales-empty {
+    padding: 28px 12px; text-align: center; color: var(--text-2);
+    border: 1px dashed var(--stroke-2); border-radius: var(--r-surface); background: var(--n-0);
+  }
+  .my-scales-empty .eh-sub { margin-top: 6px; font-size: 12px; color: var(--text-3); }
+
+  /* ---------------- 使用说明（帮助）：左侧分节目录 + 右侧渲染后的 Markdown ---------------- */
+  #helpDialog { width: 900px; }
+  .help-wrap {
+    display: flex; gap: 18px; align-items: stretch;
+    height: min(64vh, 560px); min-height: 240px;
+  }
+  .help-nav {
+    flex: 0 0 196px; overflow: auto; display: flex; flex-direction: column; gap: 2px;
+    padding: 0 10px 0 0; border-right: 1px solid var(--stroke-1);
+  }
+  .help-nav .hn-group { display: flex; flex-direction: column; gap: 2px; }
+  .help-nav button {
+    display: flex; align-items: baseline; gap: 2px;
+    text-align: left; border: 1px solid transparent; background: transparent;
+    padding: 8px 10px; border-radius: var(--r-control); color: var(--text-2);
+    font-size: 13px; line-height: 1.5; cursor: pointer;
+    overflow: hidden; white-space: nowrap;
+  }
+  .help-nav button:hover { background: var(--n-2); color: var(--text-1); }
+  .help-nav button.active {
+    background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+    font-weight: 600; box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .help-nav .hn-top { font-weight: 600; }                       /* 章名加粗 */
+  .help-nav .hn-caret { flex: 0 0 12px; color: var(--text-3); font-size: 10px; font-weight: 400; }
+  .help-nav .hn-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* 小节默认不显示，点开所属章节后才展开；小节文字保持常规字重 */
+  .help-nav .hn-sub { display: none; padding-left: 24px; font-size: 12.5px; font-weight: 400; }
+  .help-nav .hn-group.open .hn-sub { display: flex; }
+  .help-doc {
+    flex: 1 1 auto; min-width: 0; overflow: auto; padding-right: 10px;
+    color: var(--text-1); font-size: 13px; line-height: 1.75;
+  }
+  .help-doc h1 { font-size: 19px; margin: 0 0 10px; }
+  .help-doc h2 {
+    font-size: 15px; margin: 22px 0 8px; padding-top: 8px;
+    border-top: 1px solid var(--stroke-1);
+  }
+  .help-doc h2:first-of-type { margin-top: 16px; border-top: none; padding-top: 0; }
+  .help-doc h3 { font-size: 13.5px; margin: 16px 0 6px; }
+  .help-doc p { margin: 8px 0; }
+  .help-doc ul, .help-doc ol { margin: 8px 0; padding-left: 22px; }
+  .help-doc li { margin: 3px 0; }
+  .help-doc code {
+    padding: 1px 5px; border-radius: 4px; background: var(--n-3);
+    border: 1px solid var(--stroke-1); font: 12px/1.5 var(--font-num);
+  }
+  .help-doc pre {
+    margin: 10px 0; padding: 10px 12px; background: var(--n-0);
+    border: 1px solid var(--stroke-1); border-radius: var(--r-surface); overflow: auto;
+  }
+  .help-doc pre code { padding: 0; border: none; background: transparent; font-size: 12px; }
+  .help-doc blockquote {
+    margin: 10px 0; padding: 8px 12px; background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--r-control) var(--r-control) 0; color: var(--text-2);
+  }
+  .help-doc blockquote p { margin: 0; }
+  .help-doc table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 12.5px; }
+  .help-doc th, .help-doc td {
+    border: 1px solid var(--stroke-2); padding: 5px 8px; text-align: left; vertical-align: top;
+  }
+  .help-doc th { background: var(--n-2); font-weight: 600; }
+  .help-doc hr { border: none; border-top: 1px solid var(--stroke-1); margin: 18px 0; }
+  .help-doc a { color: var(--accent); }
+  /* 说明文档源码：不显示、不执行，只作为渲染器的输入 */
+  #helpMarkdown { display: none; }
+
+  .color-editor { display: flex; gap: 16px; align-items: flex-start; }
+  /* 色块本身就是原生 <input type="color">：点击即可打开 Windows 原生取色器 */
+  .color-preview {
+    width: 64px; height: 64px; flex: 0 0 auto; padding: 0; margin: 0;
+    border: 1px solid var(--stroke-3); border-radius: var(--r-control);
+    background: var(--n-0); cursor: pointer; box-shadow: var(--shadow-2);
+    -webkit-appearance: none; appearance: none;
+  }
+  .color-preview::-webkit-color-swatch-wrapper { padding: 2px; }
+  .color-preview::-webkit-color-swatch { border: none; border-radius: 2px; }
+  .color-preview::-moz-color-swatch { border: none; border-radius: 2px; }
+  .color-right { display: flex; flex-direction: column; gap: 8px; }
+  .color-right .row { gap: 8px; }
+  .hex-input { width: 96px; font-family: var(--font-num); }
+  .rgb-input { width: 62px; font-family: var(--font-num); }
+  /* 「导出到剪贴板」：复制成功后短暂显示「已复制」，2 秒后渐隐再切回原文案。
+     固定最小宽度，避免文案变短时按钮与右边的「确定 / 导入」左右跳动。 */
+  #scaleLibCopy {
+    min-width: 104px;
+    transition: background-color .12s var(--ease), border-color .12s var(--ease),
+                color .12s var(--ease), opacity .3s var(--ease);
+  }
+  #scaleLibCopy.copied {
+    color: var(--accent); border-color: var(--accent); background: var(--accent-soft);
+  }
+  #scaleLibCopy.fading { opacity: 0; }
+
+  .hint { color: var(--text-2); font-size: 12px; }
+  /* 输入色标：粘贴 JSON 的多行文本框 + 行内错误 */
+  #textScaleDialog { width: 560px; }
+  #textScaleArea {
+    width: 100%; min-height: 200px; box-sizing: border-box; resize: vertical;
+    font: 12px/1.5 var(--font-num); padding: 6px 8px; color: var(--text-1);
+    border: 1px solid var(--stroke-2); border-radius: var(--r-control); background: var(--n-0);
+    white-space: pre; overflow: auto; tab-size: 2;
+  }
+  #textScaleArea:hover { border-color: var(--stroke-3); }
+  #textScaleArea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .err {
+    color: var(--danger); font-size: 12px; white-space: pre-wrap;
+    background: #fdf3f2; border: 1px solid #f1c9c5;
+    border-radius: var(--r-control); padding: 6px 8px;
+  }
+  #msgTitle { font-weight: 600; }
+  #msgText { color: var(--text-2); }
+
+  /* ---------------- 滚动条 ---------------- */
+  * { scrollbar-width: thin; scrollbar-color: var(--n-6) transparent; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--n-6); border: 3px solid var(--n-0); border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--n-7); }
+
+  /* ---------------- 无障碍：尊重系统的「减少动态效果」 ---------------- */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+    #previewWrap.loading::after { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="menubar">
+    <button type="button" class="menubar-btn" id="btnHelp" data-act="help"
+            title="打开使用说明">帮助</button>
+    <span class="grow"></span>
+    <button type="button" class="menubar-btn" data-act="quit">退出</button>
+  </div>
+
+  <div id="main">
+    <!-- 预览 -->
+    <section id="previewPane">
+      <div class="pane-head">
+        <div id="previewInfo" class="muted ellipsis">请添加 PNG / JPG 图片</div>
+        <div class="range-inline">
+          <span id="imageRangeLabel">温度范围（°C）</span>
+          <label for="imageRangeUpper">上限</label>
+          <input type="text" id="imageRangeUpper" title="图片温度上限（对应灰度值 0）">
+          <label for="imageRangeLower">下限</label>
+          <input type="text" id="imageRangeLower" title="图片温度下限（对应灰度值 255）">
+        </div>
+        <button id="btnResetView" title="只重置缩放与平移，不改变色标与图片">重置视图</button>
+      </div>
+      <div id="previewWrap"><canvas id="previewCanvas"></canvas></div>
+    </section>
+
+    <!-- 色标 -->
+    <section id="scalePane">
+      <div class="btn-row">
+        <div class="menu">
+          <button type="button" class="dropbtn" id="btnOpenScale">打开色标<i class="caret"></i></button>
+          <div class="dd">
+            <div class="mi" data-act="presets">预设</div>
+            <div class="mi" data-act="myScales">我的色标</div>
+            <div class="mi" data-act="open">从设备中导入</div>
+            <div class="mi" data-act="inputScale">输入色标</div>
+          </div>
+        </div>
+        <div class="menu">
+          <button type="button" class="dropbtn" id="btnManageScales">管理色标<i class="caret"></i></button>
+          <div class="dd">
+            <div class="mi" data-act="manageScales">我的色标</div>
+            <div class="mi" data-act="importToStore">从设备导入</div>
+          </div>
+        </div>
+        <div class="menu">
+          <button type="button" class="dropbtn" id="btnSaveScale">保存色标<i class="caret"></i></button>
+          <div class="dd">
+            <div class="mi" data-act="save">保存</div>
+            <div class="mi" data-act="saveas">另存为</div>
+          </div>
+        </div>
+      </div>
+      <div class="row"><label>色标名称</label><input type="text" id="scaleName" class="grow"></div>
+      <div class="row"><label>单位</label>
+        <select id="unitSelect" class="grow">
+          <option value="°C">°C</option>
+          <option value="°F">°F</option>
+          <option value="K">K</option>
+          <option value="亮度">亮度（Brightness）</option>
+        </select>
+      </div>
+      <div class="row"><label id="rangeLabel">色标范围（°C）</label></div>
+      <div class="row">
+        <span class="muted" id="scaleRangeInfo">由最高温 / 最低温节点决定</span>
+      </div>
+      <div id="scaleBody">
+        <div id="legendWrap"><canvas id="legendCanvas"></canvas></div>
+        <div id="nodeColumn">
+          <div class="pane-head"><div class="pane-title">色标节点</div></div>
+          <div class="pane-rule"></div>
+          <div class="row">
+            <label><input type="checkbox" id="nodeSelectMode"> 选择</label>
+            <span class="grow"></span>
+            <button id="btnAddNode">添加节点</button>
+          </div>
+          <div class="row selbtns" id="nodeSelBtns">
+            <button id="btnNodeAll">全选</button>
+            <button id="btnNodeNone">全不选</button>
+            <button class="btn-danger" id="btnNodeDelete">删除选中</button>
+          </div>
+          <div id="nodeList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 图片列表 -->
+    <section id="imagePane">
+      <div class="pane-head">
+        <div class="pane-title">图片列表</div>
+        <label><input type="checkbox" id="imgSelectMode"> 选择</label>
+      </div>
+      <div class="pane-rule"></div>
+      <div class="row selbtns" id="imgSelBtns">
+        <button id="btnImgAll">全选</button>
+        <button id="btnImgNone">全不选</button>
+        <button class="btn-danger" id="btnImgDelete">删除选中</button>
+      </div>
+      <div class="row">
+        <div class="menu grow">
+          <button type="button" class="dropbtn" id="btnExportMenu">导出图片<i class="caret"></i></button>
+          <div class="dd dd-block">
+            <div class="mi" data-act="exportOne">单张导出（当前预览）</div>
+            <div class="mi" data-act="exportBatch">批量导出（已勾选的图片）</div>
+          </div>
+        </div>
+      </div>
+      <div id="imageList"></div>
+      <button class="btn-primary" id="btnAddImages">添加图片</button>
+    </section>
+  </div>
+
+  <div id="progressPanel" class="hidden">
+    <div id="progressLabel"></div>
+    <div id="progressOuter"><div id="progressInner"></div></div>
+    <button id="btnCancelExport">取消</button>
+  </div>
+
+  <div id="logPane">
+    <div class="pane-head">
+      <div class="pane-title">运行日志</div>
+      <button id="btnClearLog">清空日志</button>
+    </div>
+    <div id="logView"></div>
+  </div>
+</div>
+
+<!-- 节点编辑对话框 -->
+<dialog id="nodeDialog">
+  <form method="dialog">
+    <div class="dlg-body">
+      <div class="field">
+        <label id="nodeDlgPosLabel" for="nodeDlgPos">位置</label>
+        <input type="text" id="nodeDlgPos">
+        <div class="hint hidden" id="nodeDlgEndpointHint">保留节点：位置与颜色都可以修改，但不会被删除</div>
+      </div>
+      <div class="color-editor">
+        <input type="color" id="nodeDlgPreview" class="color-preview"
+               title="点击打开 Windows 原生颜色选择器">
+        <div class="color-right">
+          <button type="button" id="nodeDlgPick">选择颜色…</button>
+          <div class="row"><label>HEX</label><input type="text" id="nodeDlgHex" class="hex-input" maxlength="7"></div>
+          <div class="row">
+            <label>R</label><input type="number" id="nodeDlgR" class="rgb-input" min="0" max="255" step="1">
+            <label>G</label><input type="number" id="nodeDlgG" class="rgb-input" min="0" max="255" step="1">
+            <label>B</label><input type="number" id="nodeDlgB" class="rgb-input" min="0" max="255" step="1">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button value="ok" class="btn-primary" id="nodeDlgOk">确定</button>
+      <button value="cancel" id="nodeDlgCancel">取消</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 通用提示对话框 -->
+<dialog id="msgDialog">
+  <form method="dialog">
+    <div class="dlg-body">
+      <div id="msgTitle" style="font-weight:600"></div>
+      <div id="msgText" style="white-space:pre-wrap; max-width:560px; max-height:46vh; overflow:auto"></div>
+    </div>
+    <div class="dlg-foot"><button value="ok" class="btn-primary" id="msgOk">确定</button></div>
+  </form>
+</dialog>
+
+<!-- 三选一对话框 -->
+<dialog id="askDialog">
+  <form method="dialog">
+    <div class="dlg-body"><div id="askText"></div></div>
+    <div class="dlg-foot">
+      <button value="save" class="btn-primary" id="askSave">保存</button>
+      <button value="discard" id="askDiscard">不保存</button>
+      <button value="cancel" id="askCancel">取消</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 我的色标 / 管理色标（localStorage 里保存过的色标） -->
+<dialog id="myScalesDialog">
+  <div class="dlg-body">
+    <div class="dlg-head">
+      <div class="dlg-title" id="scaleLibTitle">我的色标</div>
+      <div class="dlg-tools hidden" id="scaleLibTools">
+        <label><input type="checkbox" id="scaleLibMulti"> 多选</label>
+        <button type="button" id="scaleLibAll" class="hidden">全选</button>
+        <button type="button" id="scaleLibNone" class="hidden">全不选</button>
+        <button type="button" class="btn-danger" id="scaleLibDelete" disabled>删除</button>
+      </div>
+    </div>
+    <div id="myScalesList" class="my-scales"></div>
+  </div>
+  <div class="dlg-foot dlg-foot-split">
+    <button type="button" id="myScalesCancel">取消</button>
+    <div class="dlg-tools">
+      <button type="button" id="scaleLibCopy" disabled
+              title="把选中的这条色标导出成 JSON 文本并复制到剪贴板（等同于「另存为」的内容）">导出到剪贴板</button>
+      <button type="button" class="btn-primary" id="myScalesOk">确定</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- 使用说明（帮助）：左侧分节目录 + 右侧渲染后的 Markdown 说明书 -->
+<dialog id="helpDialog">
+  <div class="dlg-body">
+    <div class="dlg-head">
+      <div class="dlg-title">使用说明</div>
+      <div class="muted" style="font-size:12px">点左侧目录可跳转 · Esc 关闭</div>
+    </div>
+    <div class="help-wrap">
+      <nav class="help-nav" id="helpNav" aria-label="章节目录"></nav>
+      <div class="help-doc" id="helpDoc"></div>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button type="button" class="btn-primary" id="helpClose">关闭</button>
+  </div>
+</dialog>
+
+<!-- 文本输入对话框 -->
+<dialog id="inputDialog">
+  <form method="dialog">
+    <div class="dlg-body">
+      <div class="field">
+        <label id="inputLabel" for="inputValue">名称</label>
+        <input type="text" id="inputValue">
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button value="ok" class="btn-primary" id="inputOk">确定</button>
+      <button value="cancel" id="inputCancel">取消</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 输入色标：粘贴 / 手打一份色标 JSON 文本，校验通过后载入为当前色标 -->
+<dialog id="textScaleDialog">
+  <div class="dlg-body">
+    <div class="field">
+      <div class="dlg-title" id="textScaleTitle">输入色标</div>
+      <label for="textScaleArea" id="textScaleHint">把色标 JSON 粘贴到这里</label>
+      <textarea id="textScaleArea" spellcheck="false" autocomplete="off"
+                placeholder='{&#10;  "created": 1735660800000,&#10;  "name": "我的色标",&#10;  "nodes": [&#10;    { "temperature_k": 301.15, "color": "#000000", "pinned": true },&#10;    { "temperature_k": 193.15, "color": "#555555" }&#10;  ]&#10;}'></textarea>
+    </div>
+    <div class="hint">温度用 Kelvin（temperature_k），颜色用 #RRGGBB；created / name 可以省略。</div>
+    <div class="err hidden" id="textScaleErr"></div>
+  </div>
+  <div class="dlg-foot">
+    <button type="button" class="btn-primary" id="textScaleOk">确定</button>
+    <button type="button" id="textScaleCancel">取消</button>
+  </div>
+</dialog>
+
+<input type="file" id="fileImages" accept="image/png,image/jpeg,.png,.jpg,.jpeg" multiple hidden>
+<input type="file" id="fileConfig" accept=".json,application/json" multiple hidden>
+<script>
+'use strict';
+/* =========================================================================
+ * 第 1 部分：核心常量与温度 / 单位换算（与界面无关）
+ * ========================================================================= */
+
+const T_C_DEFAULT_MAX = 50.0;      // 图片默认上限（p = 0）
+const T_C_DEFAULT_MIN = -85.0;     // 图片默认下限（p = 255）
+const KELVIN_OFFSET = 273.15;
+const DEF_K_MAX = T_C_DEFAULT_MAX + KELVIN_OFFSET;   // 323.15 K
+const DEF_K_MIN = T_C_DEFAULT_MIN + KELVIN_OFFSET;   // 188.15 K
+
+// 图片温度范围：灰度值 -> 物理温度的唯一依据，与色标无关
+// （切换色标不会改变像素代表多少度）
+let K_MAX = DEF_K_MAX;
+let K_MIN = DEF_K_MIN;
+let K_SPAN = K_MAX - K_MIN;
+
+// 节点允许的温度边界（绝对零度以上，避免误输入天文数字）
+const NODE_K_MIN = 1.0;
+const NODE_K_MAX = 2000.0;
+
+function setRange(upperK, lowerK) {
+  K_MAX = Number(upperK);
+  K_MIN = Number(lowerK);
+  K_SPAN = K_MAX - K_MIN;
+}
+const cMax = () => K_MAX - KELVIN_OFFSET;
+const cMin = () => K_MIN - KELVIN_OFFSET;
+
+/** 图片温度范围校验 */
+function validateImageRange(upperK, lowerK) {
+  if (!isFinite(upperK) || !isFinite(lowerK)) return '上限与下限都必须是数字。';
+  if (upperK - lowerK < 1e-6) return '上限必须大于下限。';
+  if (lowerK < NODE_K_MIN || upperK > NODE_K_MAX) {
+    return '温度范围必须在 ' + (NODE_K_MIN - KELVIN_OFFSET).toFixed(2) + '°C ~ '
+      + (NODE_K_MAX - KELVIN_OFFSET).toFixed(2) + '°C 之间。';
+  }
+  return null;
+}
+
+const UNIT_C = '°C', UNIT_F = '°F', UNIT_K = 'K', UNIT_B = '亮度';
+const UNITS = [UNIT_C, UNIT_F, UNIT_K, UNIT_B];
+const P_MAX = 255;
+
+const DEFAULT_SCALE_NAME = '未命名色标';
+const DEFAULT_HIGH_RGB = [0, 0, 0];          // 上限温度 -> 黑色
+const DEFAULT_LOW_RGB = [255, 255, 255];     // 下限温度 -> 白色
+
+/**
+ * Legend 刻度（物理 °C 位置）。温度轴始终等于**图片温度范围**，
+ * 默认每 10°C 一个刻度；范围很窄/很宽时自动换挡，刻度数量保持在 3 ~ 14 之间。
+ * 图片上下限若正好落在整点上也会包含在内。
+ */
+function legendTicksC() {
+  const lo = cMin(), hi = cMax();
+  if (!(hi > lo)) return [hi];
+  const steps = [1, 2, 5, 10, 20, 25, 50, 100, 200];
+  const span = s => {
+    const first = Math.ceil(lo / s - 1e-9);
+    const last = Math.floor(hi / s + 1e-9);
+    return { first: first, last: last, count: last - first + 1 };
+  };
+  let chosen = null;
+  for (const s of steps) {
+    const r = span(s);
+    if (r.count >= 3 && r.count <= 14) { chosen = s; break; }
+    if (chosen === null && r.count <= 14) chosen = s;
+  }
+  if (chosen === null) chosen = steps[steps.length - 1];
+  const r = span(chosen);
+  const out = [];
+  for (let i = r.first; i <= r.last; i++) out.push(i * chosen);
+  return out;
+}
+
+/**
+ * Legend 上要标注的项：整点刻度 + 图片温度上下限。
+ * 上下限不是整十数（没落在刻度网格上）时会额外补上，保证两端始终标得出来。
+ */
+function legendEntries() {
+  const lo = cMin(), hi = cMax();
+  const ticks = legendTicksC();
+  const onGrid = v => ticks.some(t => Math.abs(t - v) < 1e-9);
+  const entries = ticks.map(c => ({
+    c: c,
+    isLimit: Math.abs(c - hi) < 1e-9 || Math.abs(c - lo) < 1e-9,
+  }));
+  if (!onGrid(hi)) entries.push({ c: hi, isLimit: true });
+  if (!onGrid(lo)) entries.push({ c: lo, isLimit: true });
+  entries.sort((a, b) => b.c - a.c);          // 高温在上
+  return entries;
+}
+
+const KEY_DIGITS = 2;
+
+/** round-half-even（银行家舍入），按十进制字面值处理。 */
+function roundHalfEven(value, digits = KEY_DIGITS) {
+  if (!isFinite(value)) return value;
+  const m = Math.pow(10, digits);
+  const x = value * m;
+  const f = Math.floor(x);
+  const d = x - f;
+  const EPS = 1e-9;
+  let r;
+  if (Math.abs(d - 0.5) < EPS) r = (Math.abs(f) % 2 === 0) ? f : f + 1;
+  else r = Math.round(x);
+  return r / m;
+}
+
+/** 灰度值 0..255 -> Kelvin。p=0 -> 50°C，p=255 -> -85°C。 */
+function pToKelvin(p) { return K_MAX + (K_MIN - K_MAX) * (p / P_MAX); }
+/** Kelvin -> 灰度位置 0..255（连续浮点）。 */
+function kelvinToP(k) { return (K_MAX - k) * (P_MAX / K_SPAN); }
+
+function toDisplay(kelvin, unit) {
+  switch (unit) {
+    case UNIT_C: return kelvin - KELVIN_OFFSET;
+    case UNIT_F: return (kelvin - KELVIN_OFFSET) * 9 / 5 + 32;
+    case UNIT_K: return kelvin;
+    case UNIT_B: return (K_MAX - kelvin) * (P_MAX / K_SPAN);   // 顶部 0，底部 255
+    default: throw new Error('未知单位：' + unit);
+  }
+}
+function fromDisplay(value, unit) {
+  switch (unit) {
+    case UNIT_C: return value + KELVIN_OFFSET;
+    case UNIT_F: return (value - 32) * 5 / 9 + KELVIN_OFFSET;
+    case UNIT_K: return value;
+    case UNIT_B: return K_MAX - value * (K_SPAN / P_MAX);
+    default: throw new Error('未知单位：' + unit);
+  }
+}
+function unitSuffix(unit) { return unit === UNIT_B ? '' : unit; }
+function formatDisplay(kelvin, unit, digits = 2) {
+  return toDisplay(kelvin, unit).toFixed(digits);
+}
+function parseFloatCN(text) {
+  if (text === null || text === undefined) return null;
+  let s = String(text).trim();
+  if (!s) return null;
+  s = s.replace(/[，。]/g, '.').replace(/,/g, '.').replace(/[＋]/g, '+').replace(/[－]/g, '-')
+       .replace(/[°度]/g, '').replace(/[CFKc fk]/g, '').replace(/\s+/g, '');
+  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(s)) return null;
+  const v = Number(s);
+  return isFinite(v) ? v : null;
+}
+
+function rgbToHex(rgb) {
+  return '#' + rgb.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+function parseColor(value) {
+  if (Array.isArray(value)) {
+    if (value.length < 3) throw new Error('颜色数组长度不足');
+    const rgb = value.slice(0, 3).map(v => Math.round(Number(v)));
+    if (rgb.some(v => !isFinite(v) || v < 0 || v > 255)) throw new Error('颜色分量超出 0..255');
+    return rgb;
+  }
+  if (typeof value === 'string') {
+    let s = value.trim();
+    if (s.startsWith('#')) s = s.slice(1);
+    if (s.includes(',')) return parseColor(s.split(',').slice(0, 3).map(Number));
+    if (/^[0-9a-fA-F]{3}$/.test(s)) return [...s].map(ch => parseInt(ch + ch, 16));
+    if (/^[0-9a-fA-F]{6}$/.test(s)) return [0, 2, 4].map(i => parseInt(s.substr(i, 2), 16));
+  }
+  throw new Error('非法颜色：' + JSON.stringify(value));
+}
+
+/* =========================================================================
+ * 第 2 部分：色标模型 + 连续颜色映射
+ * ========================================================================= */
+
+let __uid = 0;
+function nextUid() { return ++__uid; }
+
+function makeNode(kelvin, rgb, pinned) {
+  return { uid: nextUid(), kelvin: kelvin, rgb: rgb.slice(0, 3), pinned: !!pinned };
+}
+function positionKey(kelvin) { return roundHalfEven(kelvin); }
+/** 保留节点：只禁止删除，位置与颜色都可以改 */
+function isPinned(node) { return !!(node && node.pinned); }
+
+/** 色标的显示范围 = 最高温节点 / 最低温节点 */
+function scaleTempRange(nodes) {
+  if (!nodes || !nodes.length) return { highK: K_MAX, lowK: K_MIN };
+  let hi = -Infinity, lo = Infinity;
+  for (const n of nodes) {
+    if (n.kelvin > hi) hi = n.kelvin;
+    if (n.kelvin < lo) lo = n.kelvin;
+  }
+  return { highK: hi, lowK: lo };
+}
+
+/** 新色标：一个强制保留的 50°C 黑色 + 一个普通的 -85°C 白色 */
+function defaultScale() {
+  return {
+    name: DEFAULT_SCALE_NAME,
+    created: Date.now(),        // 毫秒时间戳：色标身份，创建后不再改动
+    nodes: [
+      makeNode(DEF_K_MAX, DEFAULT_HIGH_RGB, true),
+      makeNode(DEF_K_MIN, DEFAULT_LOW_RGB, false),
+    ],
+  };
+}
+
+/** 稳定排序：高温 -> 低温；重叠节点保持相对顺序，因此必然相邻。 */
+function sortNodes(nodes) {
+  nodes.sort((a, b) => b.kelvin - a.kelvin);
+  return nodes;
+}
+function findNode(scale, uid) { return scale.nodes.find(n => n.uid === uid) || null; }
+function indexOfNode(scale, uid) { return scale.nodes.findIndex(n => n.uid === uid); }
+function countAt(scale, kelvin, excludeUid) {
+  const key = positionKey(kelvin);
+  return scale.nodes.filter(n => positionKey(n.kelvin) === key && n.uid !== excludeUid).length;
+}
+function nodeOverlaps(scale, node) {
+  const i = indexOfNode(scale, node.uid);
+  if (i < 0) return false;
+  if (i > 0 && positionKey(scale.nodes[i - 1].kelvin) === positionKey(node.kelvin)) return true;
+  if (i + 1 < scale.nodes.length && positionKey(scale.nodes[i + 1].kelvin) === positionKey(node.kelvin)) return true;
+  return false;
+}
+function largestGapCenter(scale) {
+  const r = scaleTempRange(scale.nodes);
+  const ks = scale.nodes.map(n => n.kelvin);
+  if (ks.length < 2) return r.highK;
+  let best = (r.highK + r.lowK) / 2, bestLen = -1;
+  for (let i = 0; i + 1 < ks.length; i++) {
+    const len = ks[i] - ks[i + 1];
+    if (len > bestLen) { bestLen = len; best = (ks[i] + ks[i + 1]) / 2; }
+  }
+  return best;
+}
+/** 返回错误文本；null 表示合法。 */
+function validateNewPosition(scale, kelvin, excludeUid) {
+  if (typeof kelvin !== 'number' || !isFinite(kelvin)) return '请输入合法的数字。';
+  if (kelvin < NODE_K_MIN || kelvin > NODE_K_MAX) {
+    return '节点温度必须在 ' + (NODE_K_MIN - KELVIN_OFFSET).toFixed(2) + '°C ~ '
+      + (NODE_K_MAX - KELVIN_OFFSET).toFixed(2) + '°C 之间。';
+  }
+  if (countAt(scale, kelvin, excludeUid) >= 2) return '同一位置最多允许 2 个节点，该位置已有 2 个节点。';
+  return null;
+}
+
+/** 连续颜色映射器：节点之间 RGB 三通道分别线性插值；重叠处形成硬跳变。 */
+class ColorMapper {
+  constructor(nodes) {
+    const sorted = [...nodes].sort((a, b) => b.kelvin - a.kelvin);
+    // 位置精度与配置文件一致（0.01 K）：这样「界面上的色标」和「保存后再打开的
+    // 色标」颜色逐像素相同，不会因为 1e-3 K 级的浮点尾数而在同一位置出现硬跳变
+    // 或极窄的过渡带（横向 / 竖向 legend 与图片着色因此永远一致）。
+    this.k = sorted.map(n => roundHalfEven(n.kelvin));
+    this.c = sorted.map(n => n.rgb.slice(0, 3));
+    this._lut = null;
+  }
+  colorAtKelvin(t) {
+    const k = this.k, c = this.c, n = k.length;
+    if (n === 0) return [0, 0, 0];
+    if (n === 1) return c[0].slice();
+    // 与 Python searchsorted(side='right') 等价：m = k[j] >= t 的个数
+    let m = 0;
+    while (m < n && k[m] >= t) m++;
+    // t 落在最冷节点上或更冷：一律取**最下方节点**的颜色（下限拉伸）。
+    // 若最冷的两个节点位置相同（硬跳变），原先会退化成取上面那个节点的颜色，
+    // 与竖向 legend / 图片着色不一致。
+    if (m >= n) return c[n - 1].slice();
+    let i = m - 1;
+    if (i < 0) i = 0;
+    if (i > n - 2) i = n - 2;
+    const k0 = k[i], k1 = k[i + 1];
+    const den = k0 - k1;
+    let f = den > 0 ? (k0 - t) / den : 0;
+    if (f < 0) f = 0; else if (f > 1) f = 1;
+    const c0 = c[i], c1 = c[i + 1];
+    return [
+      Math.round(c0[0] + (c1[0] - c0[0]) * f),
+      Math.round(c0[1] + (c1[1] - c0[1]) * f),
+      Math.round(c0[2] + (c1[2] - c0[2]) * f),
+    ];
+  }
+  /** 按灰度值 0..255 建立查找表（图片着色用），与 Legend 使用同一算法。 */
+  lut256() {
+    if (!this._lut) {
+      const lut = new Uint8Array(768);
+      for (let p = 0; p < 256; p++) {
+        const rgb = this.colorAtKelvin(pToKelvin(p));
+        lut[p * 3] = rgb[0]; lut[p * 3 + 1] = rgb[1]; lut[p * 3 + 2] = rgb[2];
+      }
+      this._lut = lut;
+    }
+    return this._lut;
+  }
+}
+
+/** 灰度 + Alpha -> RGBA（Alpha 原样复制）。 */
+function colorize(gray, alpha, mapper, width, height) {
+  const lut = mapper.lut256();
+  const out = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0, n = width * height; i < n; i++) {
+    const p = gray[i] * 3;
+    const o = i * 4;
+    out[o] = lut[p]; out[o + 1] = lut[p + 1]; out[o + 2] = lut[p + 2]; out[o + 3] = alpha[i];
+  }
+  return out;
+}
+
+/* =========================================================================
+ * 第 3 部分：配置 JSON
+ * ========================================================================= */
+
+function scaleToObject(scale) {
+  sortNodes(scale.nodes);
+  return {
+    // 毫秒时间戳：色标的唯一身份标识，创建后不再改动
+    created: Number(scale.created) || 0,
+    name: scale.name,
+    nodes: scale.nodes.map(n => {
+      const o = { temperature_k: roundHalfEven(n.kelvin), color: rgbToHex(n.rgb) };
+      if (n.pinned) o.pinned = true;      // 保留节点（不可删除）
+      return o;
+    }),
+  };
+}
+function scaleToText(scale) { return JSON.stringify(scaleToObject(scale), null, 2) + '\n'; }
+
+class ConfigError extends Error {}
+
+/**
+ * 解析一份色标配置，只做校验与取值，不改动当前状态（列表渲染时要靠它）。
+ * created 可选（旧文件没有就补当前时间）；旧文件里遗留的 range 字段直接忽略。
+ */
+function parseScaleRecord(data) {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) throw new ConfigError('JSON 顶层必须是一个对象。');
+  let name = data.name;
+  if (typeof name !== 'string' || !name.trim()) name = DEFAULT_SCALE_NAME;
+
+  let created = Number(data.created);
+  if (!isFinite(created) || created <= 0) created = Date.now();
+
+  const raw = data.nodes;
+  if (!Array.isArray(raw) || raw.length < 1) {
+    throw new ConfigError('缺少 nodes 字段，或一个节点都没有。');
+  }
+  const nodes = [];
+  raw.forEach((item, i) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      throw new ConfigError('第 ' + (i + 1) + ' 个节点不是对象。');
+    }
+    const kRaw = (item.temperature_k !== undefined) ? item.temperature_k : item.kelvin;
+    if (typeof kRaw !== 'number' || !isFinite(kRaw)) {
+      throw new ConfigError('第 ' + (i + 1) + ' 个节点缺少合法的 temperature_k（Kelvin 数值）。');
+    }
+    if (kRaw < NODE_K_MIN || kRaw > NODE_K_MAX) {
+      throw new ConfigError('第 ' + (i + 1) + ' 个节点温度 ' + kRaw + ' K 超出允许范围（'
+        + NODE_K_MIN.toFixed(2) + ' K ~ ' + NODE_K_MAX.toFixed(2) + ' K）。');
+    }
+    if (item.color === undefined) throw new ConfigError('第 ' + (i + 1) + ' 个节点缺少 color 字段。');
+    let rgb;
+    try { rgb = parseColor(item.color); }
+    catch (e) { throw new ConfigError('第 ' + (i + 1) + ' 个节点颜色非法：' + e.message); }
+    nodes.push(makeNode(kRaw, rgb, item.pinned === true));
+  });
+
+  const record = { name: name, created: created, nodes: nodes };
+  sortNodes(record.nodes);
+  const keys = record.nodes.map(n => positionKey(n.kelvin));
+  const seen = {};
+  for (const k of keys) {
+    seen[k] = (seen[k] || 0) + 1;
+    if (seen[k] > 2) {
+      throw new ConfigError('位置 ' + k.toFixed(2) + ' K 上有 ' + seen[k] + ' 个节点，同一位置最多允许 2 个。');
+    }
+  }
+  return record;
+}
+
+/** 解析成可用的色标（色标不再携带温度范围，温度范围属于图片） */
+function scaleFromObject(data) {
+  const rec = parseScaleRecord(data);
+  return { name: rec.name, created: rec.created, nodes: rec.nodes };
+}
+
+/* =========================================================================
+ * 第 4 部分：色标库（localStorage）
+ *
+ * 「保存」写入这里，按 created 毫秒时间戳匹配：时间戳是色标的唯一身份，
+ * 同名不同戳是两个色标，改名后再保存仍然是同一条记录。
+ * ========================================================================= */
+
+const SCALE_STORE_KEY = 'ir_enhancer.scales.v1';
+
+/** 按 created 覆盖或插入（纯函数，便于自检） */
+function upsertScaleRecord(list, record) {
+  const out = (list || []).filter(r => r && Number(r.created) !== Number(record.created));
+  out.push(record);
+  out.sort((a, b) => Number(b.created) - Number(a.created));
+  return out;
+}
+
+function sortScaleRecords(list) {
+  return (list || []).slice().sort((a, b) => Number(b.created) - Number(a.created));
+}
+
+/** 把解析后的记录还原成可入库的标准对象 */
+function recordToStorable(rec) {
+  sortNodes(rec.nodes);
+  return {
+    created: Number(rec.created),
+    name: rec.name,
+    nodes: rec.nodes.map(n => {
+      const o = { temperature_k: roundHalfEven(n.kelvin), color: rgbToHex(n.rgb) };
+      if (n.pinned) o.pinned = true;
+      return o;
+    }),
+  };
+}
+
+function formatCreatedTime(ms) {
+  const d = new Date(Number(ms) || 0);
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+function storeAvailable() {
+  try {
+    const k = '__ir_probe__';
+    localStorage.setItem(k, '1');
+    localStorage.removeItem(k);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function readScaleStore() {
+  try {
+    const raw = localStorage.getItem(SCALE_STORE_KEY);
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    log('读取本地色标库失败：' + e.message);
+    return [];
+  }
+}
+
+function writeScaleStore(list) {
+  try {
+    localStorage.setItem(SCALE_STORE_KEY, JSON.stringify(list));
+    return true;
+  } catch (e) {
+    log('写入本地色标库失败：' + e.message);
+    return false;
+  }
+}
+
+/**
+ * 内置「预设色标」：随工具一起发行的整套现成色标（数据来自项目里的 PreSet/*.json）。
+ * 它们**没有** created 字段 —— created 是色标的身份，只在**导入的那一刻**按当前
+ * 时间戳生成（见 presetToScale），所以每次导入都是一条全新的、可独立保存的色标。
+ * 这里只是数据；「打开色标 → 预设」弹窗会把它渲染成可选的列表。
+ */
+const PRESET_SCALES = [
+  {
+    name: '空白',
+    nodes: [
+      { temperature_k: 273.15, color: '#FFFFFF', pinned: true },
+    ],
+  },
+  {
+    name: 'BW',
+    nodes: [
+      { temperature_k: 323.15, color: '#000000', pinned: true },
+      { temperature_k: 188.15, color: '#FFFFFF' },
+    ],
+  },
+  {
+    name: 'IR-BD-ex',
+    nodes: [
+      { temperature_k: 301.15, color: '#000000', pinned: true },
+      { temperature_k: 301.15, color: '#030303' },
+      { temperature_k: 282.15, color: '#F7F7F7' },
+      { temperature_k: 282.15, color: '#6D6D6D' },
+      { temperature_k: 242.15, color: '#CACACA' },
+      { temperature_k: 242.15, color: '#3C3C3C' },
+      { temperature_k: 231.15, color: '#3C3C3C' },
+      { temperature_k: 231.15, color: '#6E6E6E' },
+      { temperature_k: 219.15, color: '#6E6E6E' },
+      { temperature_k: 219.15, color: '#A0A0A0' },
+      { temperature_k: 209.15, color: '#A0A0A0' },
+      { temperature_k: 209.15, color: '#000000' },
+      { temperature_k: 203.15, color: '#000000' },
+      { temperature_k: 203.15, color: '#FFFFFF' },
+      { temperature_k: 197.15, color: '#FFFFFF' },
+      { temperature_k: 197.15, color: '#878787' },
+      { temperature_k: 192.15, color: '#878787' },
+      { temperature_k: 192.15, color: '#555555' },
+      { temperature_k: 188.15, color: '#555555' },
+      { temperature_k: 188.15, color: '#333333' },
+      { temperature_k: 184.15, color: '#333333' },
+      { temperature_k: 184.15, color: '#1A1A1A' },
+      { temperature_k: 180.15, color: '#1A1A1A' },
+      { temperature_k: 180.15, color: '#000000' },
+    ],
+  },
+  {
+    name: 'IR-BD',
+    nodes: [
+      { temperature_k: 301.15, color: '#000000', pinned: true },
+      { temperature_k: 301.15, color: '#030303' },
+      { temperature_k: 282.15, color: '#F7F7F7' },
+      { temperature_k: 282.15, color: '#6D6D6D' },
+      { temperature_k: 242.15, color: '#CACACA' },
+      { temperature_k: 242.15, color: '#3C3C3C' },
+      { temperature_k: 231.15, color: '#3C3C3C' },
+      { temperature_k: 231.15, color: '#6E6E6E' },
+      { temperature_k: 219.15, color: '#6E6E6E' },
+      { temperature_k: 219.15, color: '#A0A0A0' },
+      { temperature_k: 209.15, color: '#A0A0A0' },
+      { temperature_k: 209.15, color: '#000000' },
+      { temperature_k: 203.15, color: '#000000' },
+      { temperature_k: 203.15, color: '#FFFFFF' },
+      { temperature_k: 197.15, color: '#FFFFFF' },
+      { temperature_k: 197.15, color: '#878787' },
+      { temperature_k: 192.15, color: '#878787' },
+      { temperature_k: 192.15, color: '#555555' },
+    ],
+  },
+  {
+    name: 'IR-CA',
+    nodes: [
+      { temperature_k: 323.15, color: '#880000', pinned: true },
+      { temperature_k: 313.15, color: '#020000' },
+      { temperature_k: 301.15, color: '#010101' },
+      { temperature_k: 293.15, color: '#1E1E1E' },
+      { temperature_k: 282.15, color: '#676667' },
+      { temperature_k: 278.15, color: '#002A46' },
+      { temperature_k: 278.15, color: '#0B3449' },
+      { temperature_k: 258.15, color: '#174E75' },
+      { temperature_k: 242.15, color: '#088294' },
+      { temperature_k: 231.15, color: '#16C26E' },
+      { temperature_k: 219.15, color: '#77FC02' },
+      { temperature_k: 213.15, color: '#F6EA00' },
+      { temperature_k: 213.15, color: '#F1EF00' },
+      { temperature_k: 203.15, color: '#FD4D00' },
+      { temperature_k: 203.15, color: '#FF4100' },
+      { temperature_k: 197.15, color: '#D20E11' },
+      { temperature_k: 197.15, color: '#C6241D' },
+      { temperature_k: 193.15, color: '#B94F7C' },
+      { temperature_k: 193.15, color: '#B75292' },
+      { temperature_k: 192.15, color: '#AB62D2' },
+      { temperature_k: 192.15, color: '#AF6AEB' },
+      { temperature_k: 188.15, color: '#583CB6' },
+      { temperature_k: 188.15, color: '#5138BE' },
+      { temperature_k: 183.15, color: '#C4CDFF' },
+      { temperature_k: 183.15, color: '#C6C6FF' },
+      { temperature_k: 173.15, color: '#FDFDFF' },
+    ],
+  },
+  {
+    name: 'IR-CC',
+    nodes: [
+      { temperature_k: 301.15, color: '#000000', pinned: true },
+      { temperature_k: 282.15, color: '#FFFFFF' },
+      { temperature_k: 282.15, color: '#674949' },
+      { temperature_k: 242.15, color: '#FFE1E1' },
+      { temperature_k: 242.15, color: '#A02323' },
+      { temperature_k: 231.15, color: '#A02323' },
+      { temperature_k: 231.15, color: '#FF6E00' },
+      { temperature_k: 219.15, color: '#FF6E00' },
+      { temperature_k: 219.15, color: '#FFE132' },
+      { temperature_k: 209.15, color: '#FFE132' },
+      { temperature_k: 209.15, color: '#A0D2FF' },
+      { temperature_k: 203.15, color: '#A0D2FF' },
+      { temperature_k: 203.15, color: '#00BFFF' },
+      { temperature_k: 197.15, color: '#00BFFF' },
+      { temperature_k: 197.15, color: '#4169E1' },
+      { temperature_k: 192.15, color: '#4169E1' },
+      { temperature_k: 192.15, color: '#000096' },
+      { temperature_k: 188.15, color: '#000096' },
+      { temperature_k: 188.15, color: '#FFFFFF' },
+    ],
+  },
+  {
+    name: 'OTT',
+    nodes: [
+      { temperature_k: 301.15, color: '#000000', pinned: true },
+      { temperature_k: 253.15, color: '#C8C8C8' },
+      { temperature_k: 253.15, color: '#00FFFF' },
+      { temperature_k: 243.15, color: '#000475' },
+      { temperature_k: 233.15, color: '#00F902' },
+      { temperature_k: 233.15, color: '#00FF00' },
+      { temperature_k: 223.15, color: '#F9FF00' },
+      { temperature_k: 223.15, color: '#FFFF00' },
+      { temperature_k: 213.15, color: '#FF0700' },
+      { temperature_k: 213.15, color: '#FF0000' },
+      { temperature_k: 203.15, color: '#070000' },
+      { temperature_k: 203.15, color: '#000000' },
+      { temperature_k: 193.15, color: '#DFDEDE' },
+      { temperature_k: 193.15, color: '#E865BD' },
+      { temperature_k: 183.15, color: '#820382' },
+      { temperature_k: 183.15, color: '#FFFFFF' },
+    ],
+  },
+  {
+    name: 'RAMMB',
+    nodes: [
+      { temperature_k: 308.15, color: '#000000', pinned: true },
+      { temperature_k: 243.15, color: '#FFFFFF' },
+      { temperature_k: 243.15, color: '#B5FFFF' },
+      { temperature_k: 223.15, color: '#565757' },
+      { temperature_k: 223.15, color: '#000062' },
+      { temperature_k: 213.15, color: '#0000FB' },
+      { temperature_k: 213.15, color: '#006100' },
+      { temperature_k: 203.15, color: '#00FC00' },
+      { temperature_k: 203.15, color: '#610000' },
+      { temperature_k: 193.15, color: '#FB0000' },
+      { temperature_k: 193.15, color: '#FFFF00' },
+      { temperature_k: 183.15, color: '#56564D' },
+      { temperature_k: 183.15, color: '#FFFFFF' },
+      { temperature_k: 173.15, color: '#565656' },
+    ],
+  },
+  {
+    name: 'RBTOP',
+    nodes: [
+      { temperature_k: 323.15, color: '#000000', pinned: true },
+      { temperature_k: 299.15, color: '#777777' },
+      { temperature_k: 299.15, color: '#000000' },
+      { temperature_k: 283.15, color: '#5F5F5F' },
+      { temperature_k: 278.15, color: '#676767' },
+      { temperature_k: 258.15, color: '#FAFAFA' },
+      { temperature_k: 253.15, color: '#BF00FF' },
+      { temperature_k: 245.15, color: '#0000FF' },
+      { temperature_k: 245.15, color: '#000DF1' },
+      { temperature_k: 243.15, color: '#0028D6' },
+      { temperature_k: 228.15, color: '#00F40B' },
+      { temperature_k: 228.15, color: '#03FF00' },
+      { temperature_k: 218.15, color: '#EDFF00' },
+      { temperature_k: 218.15, color: '#FFF900' },
+      { temperature_k: 208.15, color: '#FF1100' },
+      { temperature_k: 208.15, color: '#F90000' },
+      { temperature_k: 198.15, color: '#100000' },
+      { temperature_k: 198.15, color: '#0D0D0D' },
+      { temperature_k: 183.15, color: '#A0A0A0' },
+      { temperature_k: 173.15, color: '#FFFFFF' },
+    ],
+  },
+];
+
+/** 预置色标在弹窗里的内部行号（负数，不会与真实毫秒时间戳冲突） */
+const PRESET_ROW_BASE = -1000;
+
+/** 把预置色标包装成弹窗能用的记录（只为了列表渲染与单选，导入时不会用到这个 created） */
+function presetRecords() {
+  return PRESET_SCALES.map((p, i) => ({ created: PRESET_ROW_BASE - i, name: p.name, nodes: p.nodes }));
+}
+
+/** 按名字取一条预置色标（找不到返回 null） */
+function presetByName(name) {
+  return PRESET_SCALES.filter(p => p.name === name)[0] || null;
+}
+
+/**
+ * 把预置色标变成可用的色标对象：**created 按调用时刻生成**
+ * （预置文件里没有这个字段，导入后才算一条新色标，之后可以「保存」进本地库）。
+ */
+function presetToScale(preset, created) {
+  return scaleFromObject({
+    created: created === undefined ? Date.now() : created,
+    name: preset.name,
+    nodes: preset.nodes,
+  });
+}
+
+/* =========================================================================
+ * 第 4 部分：PNG 解码 / 编码（自行实现，保证灰度与 Alpha 逐字节精确）
+ *
+ * 说明：浏览器 canvas 的 getImageData 会在预乘 Alpha 往返中丢精度
+ * （alpha<255 时灰度可能偏差 1~2 级，约等于 0.5~1°C），因此这里直接解析
+ * PNG 数据流；解压/压缩使用浏览器内置的 DecompressionStream / CompressionStream。
+ * ========================================================================= */
+
+const PNG_SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function hasCompressionStream() {
+  return typeof DecompressionStream === 'function' && typeof CompressionStream === 'function';
+}
+
+async function inflateBytes(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function deflateBytes(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function concatBytes(list) {
+  let total = 0;
+  for (const b of list) total += b.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const b of list) { out.set(b, off); off += b.length; }
+  return out;
+}
+
+function pngChunk(type, data) {
+  const len = data.length;
+  const out = new Uint8Array(12 + len);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, len);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(data, 8);
+  const crcInput = new Uint8Array(4 + len);
+  crcInput.set(out.subarray(4, 8 + len));
+  dv.setUint32(8 + len, crc32(crcInput));
+  return out;
+}
+
+/** PNG 行反滤波。 */
+function pngUnfilter(raw, width, height, bpp, stride) {
+  const out = new Uint8Array(height * stride);
+  let pos = 0;
+  for (let y = 0; y < height; y++) {
+    if (pos >= raw.length) throw new Error('PNG 数据不完整。');
+    const ft = raw[pos++];
+    const rowOff = pos;
+    pos += stride;
+    const o = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? out[o + x - bpp] : 0;
+      const b = y > 0 ? out[o - stride + x] : 0;
+      const c = (x >= bpp && y > 0) ? out[o - stride + x - bpp] : 0;
+      let v = raw[rowOff + x];
+      if (ft === 0) { /* None */ }
+      else if (ft === 1) v = (v + a) & 255;
+      else if (ft === 2) v = (v + b) & 255;
+      else if (ft === 3) v = (v + ((a + b) >> 1)) & 255;
+      else if (ft === 4) {
+        const p = a + b - c;
+        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        const pred = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+        v = (v + pred) & 255;
+      } else {
+        throw new Error('不支持的 PNG 行滤波类型：' + ft);
+      }
+      out[o + x] = v;
+    }
+  }
+  return out;
+}
+
+function scaleToByte(v, maxV) { return Math.round(v * 255 / maxV); }
+
+/**
+ * 解析 PNG，返回 { width, height, gray: Uint8Array, alpha: Uint8Array }。
+ * 只支持非隔行扫描（隔行图片会抛错，由调用方回退到 canvas 解码）。
+ */
+async function decodePNG(buffer) {
+  const b = new Uint8Array(buffer);
+  if (b.length < 8) throw new Error('不是有效的 PNG 文件');
+  for (let i = 0; i < 8; i++) if (b[i] !== PNG_SIG[i]) throw new Error('不是有效的 PNG 文件');
+
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let off = 8, ihdr = null;
+  const idat = [];
+  let palette = null, trns = null;
+
+  while (off + 8 <= b.length) {
+    const len = dv.getUint32(off);
+    const type = String.fromCharCode(b[off + 4], b[off + 5], b[off + 6], b[off + 7]);
+    const data = b.subarray(off + 8, off + 8 + len);
+    if (type === 'IHDR') {
+      ihdr = {
+        width: dv.getUint32(off + 8), height: dv.getUint32(off + 12),
+        bitDepth: b[off + 16], colorType: b[off + 17],
+        compression: b[off + 18], filter: b[off + 19], interlace: b[off + 20],
+      };
+    } else if (type === 'IDAT') idat.push(data);
+    else if (type === 'PLTE') palette = data;
+    else if (type === 'tRNS') trns = data;
+    else if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  if (!ihdr) throw new Error('PNG 缺少 IHDR。');
+  if (ihdr.interlace !== 0) throw new Error('暂不支持隔行扫描的 PNG。');
+  if (ihdr.compression !== 0 || ihdr.filter !== 0) throw new Error('不支持的 PNG 压缩/滤波方式。');
+  if (!idat.length) throw new Error('PNG 缺少图像数据。');
+
+  const w = ihdr.width, h = ihdr.height, bd = ihdr.bitDepth, ct = ihdr.colorType;
+  const CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+  const ch = CHANNELS[ct];
+  if (ch === undefined) throw new Error('不支持的 PNG 颜色类型：' + ct);
+  if (![1, 2, 4, 8, 16].includes(bd)) throw new Error('不支持的 PNG 位深：' + bd);
+  if (ct === 3 && !palette) throw new Error('调色板 PNG 缺少 PLTE。');
+
+  const raw = await inflateBytes(concatBytes(idat));
+  const bitsPerPixel = ch * bd;
+  const stride = Math.ceil(w * bitsPerPixel / 8);
+  const bpp = Math.max(1, Math.ceil(bitsPerPixel / 8));
+  const px = pngUnfilter(raw, w, h, bpp, stride);
+
+  const gray = new Uint8Array(w * h);
+  const alpha = new Uint8Array(w * h);
+  const maxV = (1 << bd) - 1;
+
+  const sampleAt = (rowBase, index) => {
+    if (bd === 8) return px[rowBase + index];
+    if (bd === 16) return (px[rowBase + index * 2] << 8) | px[rowBase + index * 2 + 1];
+    const bitPos = index * bd;
+    const bytePos = rowBase + (bitPos >> 3);
+    const shift = 8 - bd - (bitPos & 7);
+    return (px[bytePos] >> shift) & maxV;
+  };
+
+  for (let y = 0; y < h; y++) {
+    const rowBase = y * stride;
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      let g = 0, a = 255;
+      if (ct === 0) {
+        g = scaleToByte(sampleAt(rowBase, x), maxV);
+        a = 255;
+      } else if (ct === 4) {
+        g = scaleToByte(sampleAt(rowBase, x * 2), maxV);
+        a = scaleToByte(sampleAt(rowBase, x * 2 + 1), maxV);
+      } else if (ct === 2) {
+        const r = scaleToByte(sampleAt(rowBase, x * 3), maxV);
+        const gg = scaleToByte(sampleAt(rowBase, x * 3 + 1), maxV);
+        const bb = scaleToByte(sampleAt(rowBase, x * 3 + 2), maxV);
+        g = (r === gg && gg === bb) ? r : Math.round(0.299 * r + 0.587 * gg + 0.114 * bb);
+        a = 255;
+      } else if (ct === 6) {
+        const r = scaleToByte(sampleAt(rowBase, x * 4), maxV);
+        const gg = scaleToByte(sampleAt(rowBase, x * 4 + 1), maxV);
+        const bb = scaleToByte(sampleAt(rowBase, x * 4 + 2), maxV);
+        g = (r === gg && gg === bb) ? r : Math.round(0.299 * r + 0.587 * gg + 0.114 * bb);
+        a = scaleToByte(sampleAt(rowBase, x * 4 + 3), maxV);
+      } else { // ct === 3 调色板
+        const pi = sampleAt(rowBase, x);
+        g = palette[pi * 3];
+        a = (trns && pi < trns.length) ? trns[pi] : 255;
+        if (palette[pi * 3] !== palette[pi * 3 + 1] || palette[pi * 3 + 1] !== palette[pi * 3 + 2]) {
+          g = Math.round(0.299 * palette[pi * 3] + 0.587 * palette[pi * 3 + 1] + 0.114 * palette[pi * 3 + 2]);
+        }
+      }
+      gray[idx] = g;
+      alpha[idx] = a;
+    }
+  }
+  return { width: w, height: h, gray: gray, alpha: alpha };
+}
+
+/**
+ * 用浏览器解码任意可解码的图片（JPG / JPEG，以及内置 PNG 解码失败时的兜底）。
+ * 不透明像素（JPG 全是）经 canvas 往返是无损的，所以灰度值可以放心从这里取。
+ */
+async function decodePNGViaCanvas(file) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  } catch (e) {
+    bitmap = await createImageBitmap(file);
+  }
+  const bw = bitmap.width, bh = bitmap.height;    // close() 之后宽高会归零，先取出来
+  if (!bw || !bh) {
+    if (bitmap.close) bitmap.close();
+    throw new Error('无法解码该图片（尺寸为 0）');
+  }
+  const cv = makeCanvas(bw, bh);
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.clearRect(0, 0, bw, bh);
+  ctx.drawImage(bitmap, 0, 0);
+  const d = ctx.getImageData(0, 0, bw, bh).data;
+  const n = bw * bh;
+  const gray = new Uint8Array(n), alpha = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
+    gray[i] = (r === g && g === b) ? r : Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+    alpha[i] = d[i * 4 + 3];
+  }
+  if (bitmap.close) bitmap.close();
+  return { width: bw, height: bh, gray: gray, alpha: alpha };
+}
+
+/** RGBA -> PNG 字节流（8 位 RGBA，保留 Alpha）。 */
+async function encodePNG(rgba, width, height) {
+  const stride = width * 4;
+  const rawData = new Uint8Array((stride + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const o = y * (stride + 1);
+    rawData[o] = 0;                                    // filter: None
+    rawData.set(rgba.subarray(y * stride, (y + 1) * stride), o + 1);
+  }
+  const idat = hasCompressionStream() ? await deflateBytes(rawData) : rawData;
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, width);
+  dv.setUint32(4, height);
+  ihdr[8] = 8;    // bit depth
+  ihdr[9] = 6;    // color type: RGBA
+  ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return concatBytes([
+    new Uint8Array(PNG_SIG),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', idat),
+    pngChunk('IEND', new Uint8Array(0)),
+  ]);
+}
+
+/* =========================================================================
+ * 第 5 部分：ZIP 打包（批量导出在无目录写入权限时的回退方案）
+ * ========================================================================= */
+
+function zipStore(files) {
+  const enc = new TextEncoder();
+  const locals = [], centrals = [];
+  let offset = 0;
+  const now = new Date();
+  const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+  const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const crc = crc32(f.data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);         // version needed
+    lv.setUint16(6, 0x0800, true);     // UTF-8 文件名
+    lv.setUint16(8, 0, true);          // store
+    lv.setUint16(10, dosTime, true);
+    lv.setUint16(12, dosDate, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, f.data.length, true);
+    lv.setUint32(22, f.data.length, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);
+    local.set(nameBytes, 30);
+    locals.push(local, f.data);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, dosTime, true);
+    cv.setUint16(14, dosDate, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, f.data.length, true);
+    cv.setUint32(24, f.data.length, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint32(42, offset, true);
+    central.set(nameBytes, 46);
+    centrals.push(central);
+
+    offset += local.length + f.data.length;
+  }
+
+  const centralSize = centrals.reduce((s, c) => s + c.length, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, offset, true);
+
+  return new Blob([...locals, ...centrals, eocd], { type: 'application/zip' });
+}
+
+/* =========================================================================
+ * 第 6 部分：文件读写助手（优先使用原生「另存为 / 选择文件夹」接口）
+ * ========================================================================= */
+
+const canUseFS = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
+const canUseDir = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function readFileText(file) {
+  return await file.text();
+}
+
+async function writeTextToHandle(handle, text) {
+  const w = await handle.createWritable();
+  await w.write(text);
+  await w.close();
+}
+
+/* =========================================================================
+ * 第 7 部分：全局状态
+ * ========================================================================= */
+
+const $ = id => document.getElementById(id);
+const PREVIEW_MAX_DIM = 2048;
+const THUMB_W = 74, THUMB_H = 54;
+
+const state = {
+  scale: defaultScale(),
+  scaleName: null,          // 关联的 JSON 文件名（新建后为 null）
+  scaleHandle: null,        // FileSystemFileHandle（可用时）
+  baseline: '',             // 最近一次保存时的序列化文本
+  unit: UNIT_C,
+  mapper: null,
+
+  entries: [],              // [{id,file,displayName,thumb,width,height}]
+  currentIndex: -1,
+
+  grayFull: null, alphaFull: null,
+  grayPrev: null, alphaPrev: null,
+  prevSize: { width: 0, height: 0 },
+  fullSize: null,
+  offscreen: null,
+  loadedEntryId: null,
+  loadToken: 0,
+
+  preview: { scale: 1, ox: 0, oy: 0, fit: true },
+  panning: false, panStart: null, panOrigin: null,
+
+  nodeSelMode: false, nodeChecked: new Set(),
+  imgSelMode: false,
+
+  busy: false,
+  batchCancel: false,
+};
+
+/* =========================================================================
+ * 第 8 部分：日志 / 消息框
+ * ========================================================================= */
+
+function log(message) {
+  const view = $('logView');
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const stamp = p(now.getHours()) + ':' + p(now.getMinutes()) + ':' + p(now.getSeconds());
+  const line = document.createElement('div');
+  line.textContent = '[' + stamp + '] ' + message;
+  view.appendChild(line);
+  while (view.childElementCount > 3000) view.removeChild(view.firstChild);
+  view.scrollTop = view.scrollHeight;
+}
+
+function showMessage(title, text, isError) {
+  return new Promise(resolve => {
+    const dlg = $('msgDialog');
+    $('msgTitle').textContent = title;
+    $('msgTitle').style.color = isError ? cssVar('--danger', '#b10e1c') : cssVar('--text-1', '#24292e');
+    $('msgText').textContent = text;
+    const close = () => { dlg.removeEventListener('close', close); resolve(); };
+    dlg.addEventListener('close', close);
+    dlg.showModal();
+  });
+}
+const showError = (title, text) => showMessage(title, text, true);
+
+/** 保存 / 不保存 / 取消 */
+function askSaveThreeWay(text) {
+  return new Promise(resolve => {
+    const dlg = $('askDialog');
+    $('askText').textContent = text;
+    $('askSave').textContent = '保存';
+    $('askDiscard').textContent = '不保存';
+    $('askDiscard').classList.remove('hidden');
+    $('askCancel').textContent = '取消';
+    const close = () => { dlg.removeEventListener('close', close); resolve(dlg.returnValue || 'cancel'); };
+    dlg.addEventListener('close', close);
+    dlg.showModal();
+  });
+}
+
+/** 两个按钮的确认框 */
+function askConfirm(text, okLabel, cancelLabel) {
+  return new Promise(resolve => {
+    const dlg = $('askDialog');
+    $('askText').textContent = text;
+    $('askSave').textContent = okLabel || '确定';
+    $('askDiscard').classList.add('hidden');
+    $('askCancel').textContent = cancelLabel || '取消';
+    const close = () => {
+      dlg.removeEventListener('close', close);
+      $('askDiscard').classList.remove('hidden');
+      resolve(dlg.returnValue === 'save');
+    };
+    dlg.addEventListener('close', close);
+    dlg.showModal();
+  });
+}
+
+/** 单行文本输入框 */
+function askText(title, label, defaultValue) {
+  return new Promise(resolve => {
+    const dlg = $('inputDialog');
+    const inp = $('inputValue');
+    $('inputLabel').textContent = label;
+    inp.value = defaultValue;
+    dlg.returnValue = 'cancel';
+    dlg.addEventListener('close', function onClose() {
+      dlg.removeEventListener('close', onClose);
+      inp.removeEventListener('keydown', onKey);
+      resolve(dlg.returnValue === 'ok' ? inp.value : null);
+    });
+    function onKey(e) {
+      if (e.key === 'Enter') { e.preventDefault(); $('inputOk').click(); }
+    }
+    inp.addEventListener('keydown', onKey);
+    dlg.showModal();
+    inp.focus();
+    inp.select();
+  });
+}
+
+/**
+ * 「输入色标」多行文本框：粘贴一份色标 JSON，就地校验。
+ * 校验不通过时把原因显示在框下方并**保持弹窗打开**（文本不丢），
+ * 通过则 resolve 成解析好的色标对象；取消 / Esc 返回 null。
+ */
+function openTextScaleDialog(title, hint, initial) {
+  return new Promise(resolve => {
+    const dlg = $('textScaleDialog');
+    const area = $('textScaleArea');
+    const okBtn = $('textScaleOk');
+    const cancelBtn = $('textScaleCancel');
+    const errBox = $('textScaleErr');
+
+    $('textScaleTitle').textContent = title || '输入色标';
+    $('textScaleHint').textContent = hint || '把色标 JSON 粘贴到这里';
+    area.value = initial || '';
+    errBox.textContent = '';
+    errBox.classList.add('hidden');
+
+    const showErr = msg => {
+      errBox.textContent = msg;
+      errBox.classList.remove('hidden');
+      area.focus();
+    };
+    const cleanup = () => {
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      dlg.removeEventListener('close', onEsc);
+    };
+    const finish = value => { cleanup(); dlg.close(); resolve(value); };
+
+    function onOk() {
+      const text = area.value.trim();
+      if (!text) { showErr('请先粘贴或输入色标 JSON 文本。'); return; }
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        showErr('JSON 解析失败：' + e.message);
+        return;
+      }
+      let scale;
+      try {
+        scale = scaleFromObject(data);
+      } catch (e) {
+        showErr('配置内容非法：' + e.message);
+        return;
+      }
+      finish(scale);
+    }
+    function onCancel() { finish(null); }
+    function onEsc() { cleanup(); resolve(null); }
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    dlg.addEventListener('close', onEsc);
+    dlg.showModal();
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+  });
+}
+
+/** 「打开色标 → 输入色标」：从文本载入一份色标（与「从设备中导入」等价，只是文本来源） */
+async function actionInputScale() {
+  if (state.busy) return false;
+  if (!await confirmDiscardChanges('输入色标')) return false;
+  const scale = await openTextScaleDialog('输入色标',
+    '把色标 JSON 粘贴到这里（「导出到剪贴板」复制出来的内容可以直接用）', '');
+  if (!scale) return false;
+  state.scale = scale;
+  state.scaleHandle = null;
+  state.scaleName = null;               // 文本来源，没有对应文件
+  state.baseline = scaleToText(scale);
+  state.nodeChecked.clear();
+  refreshAll();
+  updateActionStates();
+  log('已从「输入色标」载入：' + scale.name + '（' + scale.nodes.length + ' 个节点）');
+  return true;
+}
+
+/**
+ * 写剪贴板：优先用异步剪贴板 API（需要安全上下文 + 用户手势），
+ * 不可用时退回隐藏 textarea + execCommand('copy')，两条路都失败才返回 false。
+ */
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* 继续走兜底 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.cssText = 'position:fixed;left:-10000px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return !!ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+function makeCanvas(w, h) {
+  if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(w, h);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
+}
+
+/** 读取设计令牌，避免在 canvas 里硬编码颜色 */
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+/* =========================================================================
+ * 第 9 部分：颜色编辑器（原生取色器 + HEX + RGB 三种表示同步）
+ * ========================================================================= */
+
+class ColorEditor {
+  /** swatchId 是一个可见的 <input type="color">，即原生取色器本身（同时充当色块预览）。 */
+  constructor(swatchId, hexId, rId, gId, bId, pickId) {
+    this.swatch = $(swatchId);
+    this.hex = $(hexId);
+    this.rgb = [$(rId), $(gId), $(bId)];
+    this.pickBtn = $(pickId);
+    this.color = [0, 0, 0];
+
+    this.hex.addEventListener('input', () => {
+      const parsed = this._tryParse(this.hex.value);
+      if (parsed) this.setColor(parsed);
+    });
+    this.hex.addEventListener('blur', () => {
+      const parsed = this._tryParse(this.hex.value);
+      if (!parsed) this._sync();            // 非法输入：恢复该字段之前的合法值
+      else this.setColor(parsed);
+      this._sync();
+    });
+    this.hex.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); this.hex.blur(); } });
+    this.rgb.forEach(inp => {
+      inp.addEventListener('input', () => {
+        this.setColor(this.rgb.map(x => Math.max(0, Math.min(255, Math.round(Number(x.value) || 0)))));
+      });
+      inp.addEventListener('blur', () => {
+        this.setColor(this.rgb.map(x => Math.max(0, Math.min(255, Math.round(Number(x.value) || 0)))));
+        this._sync();
+      });
+    });
+
+    // 「选择颜色…」按钮同样打开原生取色器，弹窗锚定在可见的色块上
+    this.pickBtn.addEventListener('click', () => this.openNativePicker());
+    this.swatch.addEventListener('input', () => {
+      const parsed = this._tryParse(this.swatch.value);
+      if (parsed) this.setColor(parsed);
+    });
+    this.swatch.addEventListener('change', () => {
+      const parsed = this._tryParse(this.swatch.value);
+      if (parsed) this.setColor(parsed);
+    });
+  }
+
+  openNativePicker() {
+    this.swatch.value = rgbToHex(this.color).toLowerCase();
+    try {
+      if (typeof this.swatch.showPicker === 'function') {
+        this.swatch.showPicker();           // 显式弹出原生取色器
+        return;
+      }
+    } catch (e) { /* 不支持或缺少用户手势时退回 click() */ }
+    this.swatch.click();
+  }
+
+  _tryParse(text) {
+    let s = String(text || '').trim();
+    if (!s) return null;
+    if (!s.startsWith('#')) s = '#' + s;
+    try { return parseColor(s); } catch (e) { return null; }
+  }
+  setColor(rgb, sync = true) {
+    this.color = [rgb[0], rgb[1], rgb[2]];
+    if (sync) this._sync();
+  }
+  _sync() {
+    const hex = rgbToHex(this.color);
+    this.swatch.value = hex.toLowerCase();   // input[type=color] 只接受 #rrggbb
+    this.hex.value = hex;
+    this.rgb.forEach((inp, i) => { inp.value = String(this.color[i]); });
+  }
+}
+
+/* =========================================================================
+ * 第 10 部分：预览画布（Fit / 滚轮缩放 / 拖动平移 / 重置视图）
+ * ========================================================================= */
+
+function fitCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
+  const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+  if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
+  return dpr;
+}
+
+function applyFit() {
+  const cv = $('previewCanvas');
+  const img = state.offscreen;
+  if (!img) return;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  const s = Math.min(w / img.width, h / img.height);
+  state.preview.scale = s;
+  state.preview.ox = (w - img.width * s) / 2;
+  state.preview.oy = (h - img.height * s) / 2;
+}
+
+function drawPreview() {
+  const cv = $('previewCanvas');
+  const dpr = fitCanvas(cv);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  // 有图时让 #previewWrap 显示棋盘格，透明区域一眼可见
+  $('previewWrap').classList.toggle('checker', !!state.offscreen);
+  if (!state.offscreen) {
+    ctx.fillStyle = cssVar('--text-3', '#7b838c');
+    ctx.font = (13 * dpr) + 'px "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('请添加 PNG / JPG 图片', cv.width / 2, cv.height / 2);
+    return;
+  }
+  const img = state.offscreen;
+  const p = state.preview;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, p.ox * dpr, p.oy * dpr, img.width * p.scale * dpr, img.height * p.scale * dpr);
+}
+
+function resetPreviewView() {
+  state.preview.fit = true;
+  applyFit();
+  drawPreview();
+}
+
+/** 生成预览用小图（灰度和 Alpha 都是盒式平均，避免细线丢失）。 */
+function downscaleGrayAlpha(gray, alpha, w, h, maxDim) {
+  const longest = Math.max(w, h);
+  if (longest <= maxDim) return { gray: gray, alpha: alpha, width: w, height: h };
+  const s = maxDim / longest;
+  const nw = Math.max(1, Math.round(w * s)), nh = Math.max(1, Math.round(h * s));
+  const g = new Uint8Array(nw * nh), a = new Uint8Array(nw * nh);
+  for (let y = 0; y < nh; y++) {
+    const y0 = Math.floor(y * h / nh), y1 = Math.max(y0 + 1, Math.floor((y + 1) * h / nh));
+    for (let x = 0; x < nw; x++) {
+      const x0 = Math.floor(x * w / nw), x1 = Math.max(x0 + 1, Math.floor((x + 1) * w / nw));
+      let sg = 0, sa = 0, n = 0;
+      for (let yy = y0; yy < y1; yy++) {
+        const base = yy * w;
+        for (let xx = x0; xx < x1; xx++) { sg += gray[base + xx]; sa += alpha[base + xx]; n++; }
+      }
+      g[y * nw + x] = Math.round(sg / n);
+      a[y * nw + x] = Math.round(sa / n);
+    }
+  }
+  return { gray: g, alpha: a, width: nw, height: nh };
+}
+
+function rebuildOffscreen() {
+  if (!state.grayPrev || !state.mapper) { state.offscreen = null; drawPreview(); return; }
+  const w = state.prevSize.width, h = state.prevSize.height;
+  const rgba = colorize(state.grayPrev, state.alphaPrev, state.mapper, w, h);
+  const cv = makeCanvas(w, h);
+  cv.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
+  state.offscreen = cv;
+  if (state.preview.fit) applyFit();
+  drawPreview();
+}
+
+/* =========================================================================
+ * 第 11 部分：Legend（垂直色标条，宽度固定 40 px）
+ * ========================================================================= */
+
+const LEGEND_BAR_CSS = 16;      // 色标柱宽度（原 40px 的 2/5）
+
+function drawLegend() {
+  const cv = $('legendCanvas');
+  const dpr = fitCanvas(cv);
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);          // 透明画布：色标柱直接落在灰色背景上
+
+  const barW = Math.round(LEGEND_BAR_CSS * dpr);
+  const mapper = state.mapper;
+  // 温度轴 = 图片温度范围：色标不足的部分把两端节点色拉伸补齐，
+  // 超出图片范围的部分直接截断（不显示）。
+  if (mapper && H > 0) {
+    const tmp = makeCanvas(1, H);
+    const tctx = tmp.getContext('2d');
+    const img = tctx.createImageData(1, H);
+    for (let y = 0; y < H; y++) {
+      const p = ((y + 0.5) / H) * P_MAX;
+      const c = mapper.colorAtKelvin(pToKelvin(p));   // 与图片着色完全相同的算法
+      const o = y * 4;
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+    }
+    tctx.putImageData(img, 0, 0);
+    // 1 像素宽的色带拉伸绘制：必须关掉插值，否则边缘会采样到透明而发白
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tmp, 0, 0, 1, H, 0, 0, barW, H);
+    ctx.imageSmoothingEnabled = true;
+  } else {
+    ctx.fillStyle = cssVar('--n-4', '#e3e7eb');
+    ctx.fillRect(0, 0, barW, H);
+  }
+  ctx.strokeStyle = cssVar('--stroke-2', '#d5dae0');
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, barW - 1, H - 1);
+  if (!mapper) return;
+
+  const tickFont = Math.max(9, Math.round(10 * dpr));
+  const numFont = cssVar('--font-num', 'Consolas, monospace');
+  const labelColor = cssVar('--text-2', '#5a626b');
+  const limitColor = cssVar('--text-1', '#24292e');
+  const tickW = Math.round(6 * dpr);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+
+  const drawLabel = (y, text) => {
+    const ty = Math.max(tickFont / 2, Math.min(H - tickFont / 2, y));
+    ctx.fillText(text, barW + 6 * dpr, ty);
+  };
+
+  const entries = legendEntries();
+  // 标签间距不足时按整数倍抽稀，只画刻度线不画文字；图片上下限永远标注
+  const spacing = H / Math.max(1, entries.length);
+  const stride = Math.max(1, Math.ceil((15 * dpr) / spacing));
+
+  entries.forEach((e, i) => {
+    const kelvin = e.c + KELVIN_OFFSET;
+    let y = Math.round(kelvinToP(kelvin) / P_MAX * (H - 1));
+    y = Math.max(0, Math.min(H - 1, y));
+    ctx.fillStyle = 'rgba(255, 255, 255, .92)';
+    ctx.fillRect(0, y, tickW, 1);
+    ctx.fillStyle = cssVar('--text-1', '#24292e');
+    ctx.fillRect(0, y + 1, tickW, 1);
+    if (!e.isLimit && i % stride !== 0) return;
+    ctx.font = (e.isLimit ? '600 ' : '') + tickFont + 'px ' + numFont;
+    ctx.fillStyle = e.isLimit ? limitColor : labelColor;
+    drawLabel(y, String(Math.round(toDisplay(kelvin, state.unit))));
+  });
+}
+
+/* =========================================================================
+ * 第 12 部分：节点卡片面板
+ * ========================================================================= */
+
+/** 双箭头图标（上箭头 + 下箭头）：表示「同一位置的两个节点可交换顺序」 */
+const SWAP_ARROW_SVG =
+  '<svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">' +
+  '<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M4 10.5 V1.9 M4 1.9 L1.7 4.2 M4 1.9 L6.3 4.2"/>' +
+  '<path d="M10 1.5 V10.1 M10 10.1 L7.7 7.8 M10 10.1 L12.3 7.8"/>' +
+  '</g></svg>';
+
+function makeNodeCard(node) {
+  const pinned = isPinned(node);
+  const card = document.createElement('div');
+  card.className = 'node-card';
+
+  // 保留节点不参与批量选择（它本来就不允许删除）
+  if (state.nodeSelMode && !pinned) {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state.nodeChecked.has(node.uid);
+    cb.addEventListener('click', e => {
+      e.stopPropagation();
+      if (cb.checked) state.nodeChecked.add(node.uid); else state.nodeChecked.delete(node.uid);
+    });
+    card.appendChild(cb);
+  }
+
+  const sw = document.createElement('div');
+  sw.className = 'swatch';
+  sw.style.background = rgbToHex(node.rgb);
+  card.appendChild(sw);
+
+  const pos = document.createElement('div');
+  pos.className = 'pos';
+  const suffix = unitSuffix(state.unit);
+  pos.textContent = formatDisplay(node.kelvin, state.unit) + (suffix ? ' ' + suffix : '');
+  card.appendChild(pos);
+
+  if (pinned) {
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.textContent = '保留';
+    tag.title = '保留节点：位置与颜色都能改，但不会被删除';
+    card.appendChild(tag);
+  }
+
+  card.title = pinned
+    ? '保留节点：位置与颜色都能改，但不会被删除'
+    : '单击编辑该节点（位置 / 颜色）';
+  card.addEventListener('click', () => {
+    if (state.nodeSelMode) {
+      if (pinned) return;
+      if (state.nodeChecked.has(node.uid)) state.nodeChecked.delete(node.uid);
+      else state.nodeChecked.add(node.uid);
+      renderNodeCards();
+      return;
+    }
+    editNode(node.uid);
+  });
+  return card;
+}
+
+function makeSwapButton(uid) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'node-swap';
+  const tip = '这两个节点温度相同：交换顺序即可改变硬跳变方向';
+  btn.title = tip;
+  btn.setAttribute('aria-label', tip);
+  btn.innerHTML = SWAP_ARROW_SVG;
+  btn.addEventListener('click', e => { e.stopPropagation(); swapNode(uid); });
+  return btn;
+}
+
+function renderNodeCards() {
+  const list = $('nodeList');
+  const scrollTop = list.scrollTop;
+  list.innerHTML = '';
+  const nodes = state.scale.nodes;
+  let i = 0;
+  while (i < nodes.length) {
+    const node = nodes[i];
+    const next = nodes[i + 1];
+    // 温度相同的两个节点：两张卡片无隙并置，双箭头按钮嵌在中间
+    const paired = !!next && positionKey(node.kelvin) === positionKey(next.kelvin);
+    if (paired) {
+      const group = document.createElement('div');
+      group.className = 'node-group';
+      group.appendChild(makeNodeCard(node));
+      group.appendChild(makeNodeCard(next));
+      group.appendChild(makeSwapButton(node.uid));   // 骑在两张卡片的分界线上
+      list.appendChild(group);
+      i += 2;
+    } else {
+      list.appendChild(makeNodeCard(node));
+      i += 1;
+    }
+  }
+  list.scrollTop = scrollTop;
+}
+
+/* =========================================================================
+ * 第 13 部分：图片列表
+ * ========================================================================= */
+
+function renderImageList() {
+  const list = $('imageList');
+  const scrollTop = list.scrollTop;
+  list.innerHTML = '';
+  if (!state.entries.length) {
+    const hint = document.createElement('div');
+    hint.className = 'empty-hint';
+    hint.innerHTML =
+      '<div class="eh-art"></div>' +
+      '<div class="eh-title">还没有图片</div>' +
+      '<div class="eh-sub">点击下方「添加图片」导入 PNG 或 JPG</div>';
+    list.appendChild(hint);
+  }
+  state.entries.forEach((entry, i) => {
+    const row = document.createElement('div');
+    row.className = 'img-row' + (i === state.currentIndex ? ' current' : '');
+    row.title = entry.displayName;
+
+    if (state.imgSelMode) {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!entry.checked;
+      cb.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleEntryChecked(i, cb.checked);
+      });
+      row.appendChild(cb);
+    }
+
+    const box = document.createElement('div');
+    box.className = 'thumbBox';
+    if (entry.thumb) {
+      const c = document.createElement('canvas');
+      c.width = entry.thumb.width;
+      c.height = entry.thumb.height;
+      c.getContext('2d').drawImage(entry.thumb, 0, 0);
+      box.appendChild(c);
+    }
+    row.appendChild(box);
+
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = entry.displayName;
+    row.appendChild(name);
+
+    // 选择模式：点击整行 / 缩略图 / 名称 / 其他区域都只切换勾选，不切换预览
+    row.addEventListener('click', () => {
+      if (state.imgSelMode) toggleEntryChecked(i, !state.entries[i].checked);
+      else setCurrentImage(i);
+    });
+
+    list.appendChild(row);
+  });
+  list.scrollTop = scrollTop;
+  updateSelectionButtons();
+}
+
+function toggleEntryChecked(index, value) {
+  const entry = state.entries[index];
+  if (!entry) return;
+  entry.checked = value;
+  renderImageList();
+}
+
+function updateSelectionButtons() {
+  $('nodeSelBtns').classList.toggle('show', state.nodeSelMode);
+  $('imgSelBtns').classList.toggle('show', state.imgSelMode);
+}
+
+/* =========================================================================
+ * 第 14 部分：刷新总入口
+ * ========================================================================= */
+
+function refreshAll() {
+  sortNodes(state.scale.nodes);
+  state.mapper = new ColorMapper(state.scale.nodes);
+  const nameInput = $('scaleName');
+  if (document.activeElement !== nameInput) nameInput.value = state.scale.name;
+  updateRangeInputs();
+  updateScaleRangeInfo();
+  drawLegend();
+  renderNodeCards();
+  updateTitle();
+  rebuildOffscreen();
+}
+
+/** 第二列只显示色标当前的温度范围（由两端节点决定，不可直接编辑） */
+function updateScaleRangeInfo() {
+  const r = scaleTempRange(state.scale.nodes);
+  const suffix = unitSuffix(state.unit);
+  const hi = Math.round(toDisplay(r.highK, state.unit));
+  const lo = Math.round(toDisplay(r.lowK, state.unit));
+  $('rangeLabel').textContent = '色标范围（' + state.unit + '）';
+  $('scaleRangeInfo').textContent = hi + suffix + ' ~ ' + lo + suffix + '（由最高温 / 最低温节点决定）';
+}
+
+function updateTitle() {
+  const mark = isDirty() ? '*' : '';
+  document.title = state.scale.name + mark + ' - 红外灰度色标增强工具';
+  $('scaleName').title = state.scale.name + mark;
+}
+
+function isDirty() { return scaleToText(state.scale) !== state.baseline; }
+
+function markClean() {
+  state.baseline = scaleToText(state.scale);
+  updateTitle();
+}
+
+function updateActionStates() {
+  const hasImage = state.currentIndex >= 0 && state.currentIndex < state.entries.length;
+  const hasAny = state.entries.length > 0;
+  const busy = state.busy;
+  setMenuEnabled('presets', !busy);
+  setMenuEnabled('open', !busy);
+  setMenuEnabled('myScales', !busy);
+  setMenuEnabled('manageScales', !busy);
+  setMenuEnabled('importToStore', !busy);
+  setMenuEnabled('inputScale', !busy);
+  setMenuEnabled('save', !busy);
+  setMenuEnabled('saveas', !busy);
+  setMenuEnabled('exportOne', hasImage && !busy);
+  // 「批量导出」始终可点：没有勾选时点了会提示「请选择图片」，而不是静默无反应
+  setMenuEnabled('exportBatch', !busy);
+  setMenuEnabled('quit', !busy);
+  setTriggerEnabled('btnExportMenu', !busy);
+  setTriggerEnabled('btnOpenScale', !busy);
+  setTriggerEnabled('btnManageScales', !busy);
+  setTriggerEnabled('btnSaveScale', !busy);
+}
+
+function setMenuEnabled(act, enabled) {
+  document.querySelectorAll('[data-act="' + act + '"]').forEach(el => {
+    el.classList.toggle('disabled', !enabled);
+    if (el.tagName === 'BUTTON') el.disabled = !enabled;
+  });
+}
+
+function setTriggerEnabled(id, enabled) {
+  const el = $(id);
+  if (el) el.disabled = !enabled;
+}
+
+function setBusy(busy) {
+  state.busy = busy;
+  ['scaleName', 'unitSelect', 'imageRangeUpper', 'imageRangeLower', 'nodeSelectMode', 'btnAddNode', 'btnNodeAll', 'btnNodeNone',
+   'btnNodeDelete', 'imgSelectMode', 'btnImgAll', 'btnImgNone', 'btnImgDelete',
+   'btnAddImages', 'btnResetView', 'btnExportMenu', 'btnOpenScale', 'btnSaveScale',
+   'btnManageScales'].forEach(
+    id => { $(id).disabled = busy; });
+  $('nodeList').style.pointerEvents = busy ? 'none' : '';
+  $('imageList').style.pointerEvents = busy ? 'none' : '';
+  $('previewCanvas').style.pointerEvents = busy ? 'none' : '';
+  $('app').classList.toggle('busy', busy);
+  $('app').setAttribute('aria-busy', busy ? 'true' : 'false');
+  updateActionStates();
+}
+
+/* =========================================================================
+ * 第 15 部分：图片导入 / 切换 / 删除
+ * ========================================================================= */
+
+let entryUidSeq = 0;
+
+function makeDisplayName(filename, used) {
+  const dot = filename.lastIndexOf('.');
+  const stem = dot > 0 ? filename.slice(0, dot) : filename;
+  const ext = dot > 0 ? filename.slice(dot) : '';
+  let candidate = filename, i = 1;
+  while (used.has(candidate.toLowerCase())) { candidate = stem + '(' + i + ')' + ext; i++; }
+  used.add(candidate.toLowerCase());
+  return candidate;
+}
+
+/** 支持的文件类型：PNG（灰度/灰度+Alpha/RGB/RGBA/调色板）与 JPG / JPEG。 */
+function isSupportedImageName(name) {
+  return /\.(png|jpe?g)$/i.test(name);
+}
+function isJpegName(name) {
+  return /\.jpe?g$/i.test(name);
+}
+function isPngBytes(bytes) {
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (!bytes || bytes.length < 8) return false;
+  for (let i = 0; i < 8; i++) if (bytes[i] !== sig[i]) return false;
+  return true;
+}
+
+/** 按文件真实内容选择解码方式：PNG 走内置精确解码，其它（JPG 等）走浏览器解码。 */
+async function decodeImageFile(file) {
+  let head = null;
+  try {
+    head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  } catch (e) { /* 读不到就交给浏览器解码 */ }
+  if (isPngBytes(head)) {
+    try {
+      return await decodePNG(await file.arrayBuffer());
+    } catch (e) {
+      log('内置 PNG 解码不可用，改用浏览器解码：' + file.name + '（' + e.message + '）');
+    }
+  }
+  return await decodePNGViaCanvas(file);
+}
+
+async function addImages(files) {
+  const used = new Set(state.entries.map(e => e.displayName.toLowerCase()));
+  const firstNew = state.entries.length;
+  let added = 0;
+  for (const file of files) {
+    if (!isSupportedImageName(file.name)) { log('已忽略不支持的文件（仅支持 PNG / JPG）：' + file.name); continue; }
+    const display = makeDisplayName(file.name, used);
+    let thumb = null;
+    try {
+      const bmp = await createImageBitmap(file);
+      const s = Math.min(THUMB_W / bmp.width, THUMB_H / bmp.height);
+      const tw = Math.max(1, Math.round(bmp.width * s)), th = Math.max(1, Math.round(bmp.height * s));
+      thumb = makeCanvas(tw, th);
+      const tctx = thumb.getContext('2d');
+      tctx.imageSmoothingEnabled = true;
+      tctx.drawImage(bmp, 0, 0, tw, th);
+      if (bmp.close) bmp.close();
+    } catch (e) {
+      log('缩略图生成失败：' + file.name + '（' + e.message + '）');
+    }
+    state.entries.push({
+      id: ++entryUidSeq, file: file, displayName: display, thumb: thumb, checked: false,
+    });
+    added++;
+    log('添加图片：' + display);
+  }
+  if (added) {
+    renderImageList();
+    updateActionStates();
+    if (state.currentIndex < 0) setCurrentImage(firstNew, true);
+  }
+}
+
+function setCurrentImage(index, force) {
+  if (index < 0 || index >= state.entries.length) {
+    state.currentIndex = -1;
+    state.loadedEntryId = null;
+    state.grayFull = state.alphaFull = state.grayPrev = state.alphaPrev = null;
+    state.offscreen = null;
+    $('previewInfo').textContent = '请添加 PNG / JPG 图片';
+    $('previewInfo').title = '';
+    renderImageList();
+    drawPreview();
+    updateActionStates();
+    return;
+  }
+  state.currentIndex = index;
+  const entry = state.entries[index];
+  renderImageList();
+  updateActionStates();
+  if (entry.id === state.loadedEntryId && !force) return;
+  state.loadedEntryId = entry.id;
+  loadEntry(entry);
+}
+
+async function loadEntry(entry) {
+  const token = ++state.loadToken;
+  $('previewInfo').textContent = entry.displayName + '    正在加载…';
+  $('previewWrap').classList.add('loading');
+  try {
+    const img = await decodeImageFile(entry.file);
+    if (token !== state.loadToken) return;
+    $('previewWrap').classList.remove('loading');
+    state.grayFull = img.gray;
+    state.alphaFull = img.alpha;
+    state.fullSize = { width: img.width, height: img.height };
+    const ds = downscaleGrayAlpha(img.gray, img.alpha, img.width, img.height, PREVIEW_MAX_DIM);
+    state.grayPrev = ds.gray;
+    state.alphaPrev = ds.alpha;
+    state.prevSize = { width: ds.width, height: ds.height };
+    const info = entry.displayName + '    ' + img.width + ' × ' + img.height;
+    $('previewInfo').textContent = info;
+    $('previewInfo').title = info;
+    state.preview.fit = true;
+    rebuildOffscreen();
+  } catch (e) {
+    if (token !== state.loadToken) return;
+    log('加载失败：' + entry.displayName + '（' + e.message + '）');
+    $('previewInfo').textContent = entry.displayName + '    加载失败';
+    state.grayFull = state.alphaFull = state.grayPrev = state.alphaPrev = null;
+    state.offscreen = null;
+    drawPreview();
+  }
+}
+
+/** 删除选中图片：按删除前的位置规则决定新的当前预览图。 */
+async function deleteSelectedImages() {
+  if (state.busy) return;
+  const indexes = [];
+  state.entries.forEach((e, i) => { if (e.checked) indexes.push(i); });
+  if (!indexes.length) {
+    await showMessage('删除图片', '请选择图片');   // 没勾选时给出明确提示
+    return;
+  }
+  const checked = new Set(indexes);
+  const n = state.entries.length;
+  const oldCurrent = state.currentIndex;
+
+  let newIndex = null;
+  if (checked.has(oldCurrent)) {
+    for (let j = oldCurrent + 1; j < n; j++) if (!checked.has(j)) { newIndex = j; break; }
+    if (newIndex === null) for (let j = oldCurrent - 1; j >= 0; j--) if (!checked.has(j)) { newIndex = j; break; }
+  } else if (oldCurrent >= 0) {
+    newIndex = oldCurrent;                     // 当前预览未被删除：保持原预览图片
+  }
+
+  const removedNames = [...checked].sort((a, b) => a - b).map(i => state.entries[i].displayName);
+  state.entries = state.entries.filter((e, i) => !checked.has(i));
+
+  let target = -1;
+  if (newIndex !== null) {
+    target = 0;
+    for (let i = 0; i < newIndex; i++) if (!checked.has(i)) target++;
+  }
+
+  log('删除图片 ' + removedNames.length + ' 张：' + removedNames.join('、'));
+  state.entries.forEach(e => { e.checked = false; });
+  state.currentIndex = -1;
+  state.loadedEntryId = null;
+  renderImageList();
+  setCurrentImage(target, true);
+  updateActionStates();
+}
+
+/* =========================================================================
+ * 第 16 部分：图片温度范围 与 色标节点增删改
+ *
+ * 图片温度范围决定「灰度值 -> 多少度」，与色标无关，切换色标不会改变它。
+ * ========================================================================= */
+
+/** 刷新图片温度范围输入框（输入框内只填数字，单位由标签给出） */
+function updateRangeInputs() {
+  $('imageRangeLabel').textContent = '温度范围（' + state.unit + '）';
+  const up = $('imageRangeUpper'), lo = $('imageRangeLower');
+  if (document.activeElement !== up) up.value = formatDisplay(K_MAX, state.unit);
+  if (document.activeElement !== lo) lo.value = formatDisplay(K_MIN, state.unit);
+}
+
+/** 提交图片温度范围：校验失败则恢复原值并提示原因 */
+function commitRange() {
+  if (state.busy) { updateRangeInputs(); return; }
+  const upV = parseFloatCN($('imageRangeUpper').value);
+  const loV = parseFloatCN($('imageRangeLower').value);
+  if (upV === null || loV === null) {
+    showError('温度范围无效', '上限与下限都必须是数字（按当前单位 ' + state.unit + ' 填写）。');
+    updateRangeInputs();
+    return;
+  }
+  const upperK = fromDisplay(upV, state.unit);
+  const lowerK = fromDisplay(loV, state.unit);
+  const err = validateImageRange(upperK, lowerK);
+  if (err) {
+    showError('温度范围无效', err);
+    updateRangeInputs();
+    return;
+  }
+  setRange(upperK, lowerK);          // 只影响灰度->温度，不动色标节点
+  log('图片温度范围已改为：' + formatDisplay(K_MAX, state.unit) + unitSuffix(state.unit)
+    + '（上限） ~ ' + formatDisplay(K_MIN, state.unit) + unitSuffix(state.unit) + '（下限）');
+  refreshAll();
+}
+
+function addNode() {
+  if (state.busy) return;
+  const kelvin = largestGapCenter(state.scale);
+  const rgb = state.mapper.colorAtKelvin(kelvin);
+  openNodeDialog({ node: null, kelvin: kelvin, rgb: rgb }).then(res => {
+    if (!res) return;
+    const node = makeNode(res.kelvin, res.rgb);
+    state.scale.nodes.push(node);
+    sortNodes(state.scale.nodes);
+    const suffix = unitSuffix(state.unit);
+    log('新增节点：' + formatDisplay(node.kelvin, state.unit) + suffix + '，颜色 ' + rgbToHex(node.rgb));
+    refreshAll();
+  });
+}
+
+function editNode(uid) {
+  if (state.busy) return;
+  const node = findNode(state.scale, uid);
+  if (!node) return;
+  const oldKelvin = node.kelvin, oldRgb = node.rgb.slice();
+  openNodeDialog({ node: node, kelvin: node.kelvin, rgb: node.rgb }).then(res => {
+    if (!res) return;
+    node.kelvin = res.kelvin;              // 保留节点也可以改位置
+    node.rgb = res.rgb;
+    sortNodes(state.scale.nodes);
+    const changes = [];
+    if (roundHalfEven(oldKelvin) !== roundHalfEven(node.kelvin)) {
+      changes.push('位置 ' + formatDisplay(oldKelvin, state.unit) + ' → ' + formatDisplay(node.kelvin, state.unit) + unitSuffix(state.unit));
+    }
+    if (oldRgb.join() !== node.rgb.join()) {
+      changes.push('颜色 ' + rgbToHex(oldRgb) + ' → ' + rgbToHex(node.rgb));
+    }
+    if (changes.length) log('修改节点（' + positionKey(node.kelvin).toFixed(2) + ' K）：' + changes.join('，'));
+    refreshAll();
+  });
+}
+
+function swapNode(uid) {
+  if (state.busy) return;
+  const nodes = state.scale.nodes;
+  const i = indexOfNode(state.scale, uid);
+  if (i < 0) return;
+  let partner = -1;
+  if (i > 0 && positionKey(nodes[i - 1].kelvin) === positionKey(nodes[i].kelvin)) partner = i - 1;
+  else if (i + 1 < nodes.length && positionKey(nodes[i + 1].kelvin) === positionKey(nodes[i].kelvin)) partner = i + 1;
+  if (partner < 0) return;
+  const key = positionKey(nodes[i].kelvin).toFixed(2);
+  const tmp = nodes[i]; nodes[i] = nodes[partner]; nodes[partner] = tmp;
+  sortNodes(nodes);
+  log('已交换 ' + key + ' K 处重叠节点的顺序（硬跳变方向改变）。');
+  refreshAll();
+}
+
+async function deleteCheckedNodes() {
+  if (state.busy) return;
+  const uids = [...state.nodeChecked];
+  if (!uids.length) {
+    await showMessage('删除节点', '请选择节点');   // 没勾选时给出明确提示
+    return;
+  }
+  const nodes = state.scale.nodes;
+  // 保留节点不可删除；同时至少要留下一个节点
+  const removable = nodes.filter(n => state.nodeChecked.has(n.uid) && !isPinned(n));
+  let kept = nodes.filter(n => removable.indexOf(n) < 0);
+  if (!kept.length) {
+    kept = [nodes[0]];
+    log('保留节点不可删除，至少要留下一个节点。');
+  }
+  const removed = nodes.length - kept.length;
+  state.scale.nodes = kept;
+  state.nodeChecked.clear();
+  if (removed) { log('已删除 ' + removed + ' 个节点。'); refreshAll(); }
+  renderNodeCards();
+}
+
+/* =========================================================================
+ * 第 17 部分：节点编辑对话框
+ * ========================================================================= */
+
+let nodeColorEditor = null;
+
+function openNodeDialog(opts) {
+  return new Promise(resolve => {
+    const dlg = $('nodeDialog');
+    const pinned = opts.node ? isPinned(opts.node) : false;
+    const posInput = $('nodeDlgPos');
+    // 输入框里只填数字，单位由标签给出，并始终跟随当前全局单位
+    const originalText = formatDisplay(opts.kelvin, state.unit);
+
+    $('nodeDlgPosLabel').textContent = '位置（' + state.unit + '）';
+    posInput.value = originalText;
+    posInput.readOnly = false;                 // 保留节点也能改位置
+    posInput.style.background = cssVar('--n-0', '#ffffff');
+    $('nodeDlgEndpointHint').classList.toggle('hidden', !pinned);
+    nodeColorEditor.setColor(opts.rgb);
+    dlg.returnValue = 'cancel';
+
+    const onBlur = () => {
+      const v = parseFloatCN(posInput.value);
+      if (v === null) { posInput.value = originalText; return; }
+      const k = fromDisplay(v, state.unit);
+      if (k < NODE_K_MIN || k > NODE_K_MAX) { posInput.value = originalText; return; }
+      posInput.value = formatDisplay(k, state.unit);
+    };
+    const onKey = e => { if (e.key === 'Enter') { e.preventDefault(); posInput.blur(); $('nodeDlgOk').click(); } };
+    const onOk = e => {
+      const v = parseFloatCN(posInput.value);
+      if (v === null) { e.preventDefault(); showError('位置无效', '请输入合法的数字。'); return; }
+      const kelvin = fromDisplay(v, state.unit);
+      const err = validateNewPosition(state.scale, kelvin, opts.node ? opts.node.uid : undefined);
+      if (err) { e.preventDefault(); showError('位置无效', err); }
+    };
+    const onClose = () => {
+      posInput.removeEventListener('blur', onBlur);
+      posInput.removeEventListener('keydown', onKey);
+      $('nodeDlgOk').removeEventListener('click', onOk);
+      dlg.removeEventListener('close', onClose);
+      if (dlg.returnValue !== 'ok') { resolve(null); return; }
+      const v = parseFloatCN(posInput.value);
+      const kelvin = (v === null) ? opts.kelvin : fromDisplay(v, state.unit);
+      resolve({ kelvin: kelvin, rgb: nodeColorEditor.color.slice() });
+    };
+    posInput.addEventListener('blur', onBlur);
+    posInput.addEventListener('keydown', onKey);
+    $('nodeDlgOk').addEventListener('click', onOk);
+    dlg.addEventListener('close', onClose);
+    dlg.showModal();
+  });
+}
+
+/* =========================================================================
+ * 第 18 部分：配置 JSON 操作
+ * ========================================================================= */
+
+/**
+ * 横向 legend：左低温、右高温，不画细刻度，只在左右两端标温度上下限。
+ * 温度轴同样取**图片温度范围**，因此列表里所有色标共用同一根温度轴，便于横向比较。
+ */
+function drawHScaleLegend(canvas, record) {
+  const dpr = fitCanvas(canvas);
+  if (!canvas.width) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const upperK = K_MAX, lowerK = K_MIN;      // 图片温度范围
+  const leftText = String(Math.round(toDisplay(lowerK, state.unit)));
+  const rightText = String(Math.round(toDisplay(upperK, state.unit)));
+  ctx.font = Math.max(9, Math.round(11 * dpr)) + 'px ' + cssVar('--font-num', 'Consolas, monospace');
+  ctx.textBaseline = 'middle';
+  const gap = Math.round(8 * dpr);
+  const lw = Math.ceil(ctx.measureText(leftText).width);
+  const rw = Math.ceil(ctx.measureText(rightText).width);
+  const barX = lw + gap;
+  const barW = Math.max(16, W - lw - rw - gap * 2);
+  const barH = Math.round(12 * dpr);
+  const barY = Math.round(H / 2 - barH / 2);
+
+  // 左端 = 图片下限，右端 = 图片上限；色标不足处由 mapper 自动拉伸两端节点色
+  const mapper = new ColorMapper(record.nodes);
+  const tmp = makeCanvas(barW, 1);
+  const tctx = tmp.getContext('2d');
+  const img = tctx.createImageData(barW, 1);
+  for (let x = 0; x < barW; x++) {
+    const t = lowerK + (upperK - lowerK) * ((x + 0.5) / barW);
+    const c = mapper.colorAtKelvin(t);
+    const o = x * 4;
+    img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+  }
+  tctx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;      // 同上：1 像素高的色带不要插值
+  ctx.drawImage(tmp, 0, 0, barW, 1, barX, barY, barW, barH);
+  ctx.imageSmoothingEnabled = true;
+  ctx.strokeStyle = cssVar('--stroke-2', '#d5dae0');
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+
+  ctx.fillStyle = cssVar('--text-2', '#5a626b');
+  ctx.textAlign = 'right';
+  ctx.fillText(leftText, barX - gap, barY + barH / 2);
+  ctx.textAlign = 'left';
+  ctx.fillText(rightText, barX + barW + gap, barY + barH / 2);
+}
+
+/**
+ * 色标库弹窗（我的色标 / 管理色标 / 预设共用）。
+ * opts = { title, okLabel, manage, presets, records }
+ *   manage=false：单选后按底部右侧按钮载入，resolve { action:'import', raw, parsed } 或 null
+ *   manage=true ：顶部有「多选 + 删除」，底部左「取消」右「导入」
+ *   presets=true：列表来自传入的 records（内置预置色标），不读本地库；每条不显示创建时间
+ */
+function openScaleLibraryDialog(records, opts) {
+  const manage = !!(opts && opts.manage);
+  const presets = !!(opts && opts.presets);
+  return new Promise(resolve => {
+    const dlg = $('myScalesDialog');
+    const list = $('myScalesList');
+    const okBtn = $('myScalesOk');
+    const cancelBtn = $('myScalesCancel');
+    const tools = $('scaleLibTools');
+    const multiBox = $('scaleLibMulti');
+    const delBtn = $('scaleLibDelete');
+    const allBtn = $('scaleLibAll');
+    const noneBtn = $('scaleLibNone');
+    const copyBtn = $('scaleLibCopy');
+    const copyLabel = copyBtn.textContent;   // 正常文案；每次打开弹窗都先恢复成它
+    let copyTimer = 0;                       // 「已复制」停留计时
+    let copyFadeTimer = 0;                   // 渐隐计时
+
+    $('scaleLibTitle').textContent = (opts && opts.title) || '我的色标';
+    okBtn.textContent = (opts && opts.okLabel) || '确定';
+    tools.classList.toggle('hidden', !manage);
+    multiBox.checked = false;
+    okBtn.disabled = true;
+    delBtn.disabled = true;
+    copyBtn.disabled = true;
+    resetCopyLabel();                        // 打开时总是显示原文案
+
+    let entries = [];
+    let selectedCreated = null;      // 单选选中的行 key（本地库用 created，预置用行号）
+    let multiMode = false;
+    const checked = new Set();       // 多选勾选的 created
+
+    /**
+     * 行的唯一 key：本地库用 created（毫秒时间戳），预置用**行号** ——
+     * 预置文件里没有 created，parseScaleRecord 会临时补一个「当前时间」，
+     * 同一毫秒解析多条会撞 key，所以预置一律按行号选。
+     */
+    const rowKey = (entry, index) => (presets ? index : Number(entry.parsed.created));
+
+    /**
+     * 立刻回到「导出到剪贴板」原文案，并中断任何进行中的渐隐动画。
+     * （切换选中的色标、切多选、删除、关闭弹窗都会走这里）
+     */
+    function resetCopyLabel() {
+      if (copyTimer) { clearTimeout(copyTimer); copyTimer = 0; }
+      if (copyFadeTimer) { clearTimeout(copyFadeTimer); copyFadeTimer = 0; }
+      copyBtn.classList.remove('copied', 'fading');
+      copyBtn.textContent = copyLabel;
+    }
+
+    /** 复制成功后：先显示「已复制」，最多停留 2 秒，再渐隐并切回原文案 */
+    function showCopiedFeedback() {
+      const HOLD_MS = 2000;      // 「已复制」最多维持 2 秒
+      const FADE_MS = 300;       // 之后逐渐隐去
+      resetCopyLabel();
+      copyBtn.classList.add('copied');
+      copyBtn.textContent = '已复制';
+      copyBtn.disabled = true;
+      copyTimer = setTimeout(() => {
+        copyTimer = 0;
+        copyBtn.classList.add('fading');
+        copyFadeTimer = setTimeout(() => {
+          copyFadeTimer = 0;
+          resetCopyLabel();
+          refreshButtons();
+        }, FADE_MS);
+      }, HOLD_MS);
+    }
+
+    const refreshButtons = () => {
+      okBtn.disabled = selectedCreated === null;
+      // 「导出到剪贴板」只在单选（选中一条）时可用；多选状态下不可用
+      copyBtn.disabled = multiMode || selectedCreated === null;
+      if (!manage) return;
+      delBtn.disabled = multiMode ? checked.size === 0 : selectedCreated === null;
+    };
+
+    const drawAll = () => {
+      requestAnimationFrame(() => {
+        Array.prototype.forEach.call(list.querySelectorAll('.scale-item'), item => {
+          const idx = Number(item.dataset.index);
+          const cv = item.querySelector('canvas');
+          if (cv && entries[idx]) drawHScaleLegend(cv, entries[idx].parsed);
+        });
+      });
+    };
+
+    function buildList() {
+      list.innerHTML = '';
+      if (!entries.length) {
+        const empty = document.createElement('div');
+        empty.className = 'my-scales-empty';
+        empty.innerHTML = presets
+          ? '<div class="eh-title">没有可用的预设</div>'
+          : '<div class="eh-title">还没有保存过色标</div>'
+            + '<div class="eh-sub">用「保存色标 → 保存」把当前色标存到这里</div>';
+        list.appendChild(empty);
+        return;
+      }
+      entries.forEach((entry, index) => {
+        const created = Number(entry.parsed.created);
+        const key = rowKey(entry, index);
+        const item = document.createElement('div');
+        item.className = 'scale-item';
+        item.dataset.index = String(index);
+        item.dataset.created = String(created);
+        item.dataset.key = String(key);
+        item.setAttribute('role', 'button');
+        item.tabIndex = 0;
+        if (!multiMode && selectedCreated === key) item.classList.add('selected');
+
+        if (manage && multiMode) {
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = checked.has(key);
+          cb.addEventListener('click', e => e.stopPropagation());
+          item.appendChild(cb);
+        }
+
+        const body = document.createElement('div');
+        body.className = 'si-body';
+
+        const cv = document.createElement('canvas');
+        body.appendChild(cv);
+
+        const nm = document.createElement('div');
+        nm.className = 'si-name';
+        nm.textContent = entry.parsed.name;
+        body.appendChild(nm);
+
+        const tm = document.createElement('div');
+        tm.className = 'si-time';
+        // 预置色标本身没有创建时间（导入那一刻才生成），这里不显示假的时间戳
+        tm.textContent = presets ? '预置色标 · 导入时自动记录创建时间' : '创建于' + formatCreatedTime(created);
+        body.appendChild(tm);
+
+        item.appendChild(body);
+
+        const activate = () => {
+          if (manage && multiMode) {
+            if (checked.has(key)) checked.delete(key); else checked.add(key);
+            const cb = item.querySelector('input[type=checkbox]');
+            if (cb) cb.checked = checked.has(key);
+          } else {
+            const switched = selectedCreated !== key;
+            selectedCreated = key;
+            Array.prototype.forEach.call(list.children, c => c.classList.remove('selected'));
+            item.classList.add('selected');
+            // 焦点色标换了：立刻切回原文案（同一条再点一次不算切换）
+            if (switched) resetCopyLabel();
+          }
+          refreshButtons();
+        };
+        item.addEventListener('click', activate);
+        item.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
+        });
+        list.appendChild(item);
+      });
+      drawAll();
+    }
+
+    const reload = () => {
+      entries = [];
+      const source = presets ? (records || []) : readScaleStore();
+      sortScaleRecords(source).forEach(raw => {
+        try { entries.push({ raw: raw, parsed: parseScaleRecord(raw) }); }
+        catch (e) { log((presets ? '预置色标' : '本地色标库') + '中有一条记录无效，已跳过：' + e.message); }
+      });
+    };
+
+    /** 「全选 / 全不选」只在多选状态下出现 */
+    const updateTools = () => {
+      allBtn.classList.toggle('hidden', !multiMode);
+      noneBtn.classList.toggle('hidden', !multiMode);
+    };
+
+    function onMultiToggle() {
+      multiMode = multiBox.checked;
+      selectedCreated = null;
+      checked.clear();
+      resetCopyLabel();
+      updateTools();
+      buildList();
+      refreshButtons();
+    }
+
+    function setAllChecked(on) {
+      checked.clear();
+      if (on) entries.forEach((e, i) => checked.add(rowKey(e, i)));
+      Array.prototype.forEach.call(list.querySelectorAll('.scale-item'), item => {
+        const cb = item.querySelector('input[type=checkbox]');
+        if (cb) cb.checked = on;
+      });
+      refreshButtons();
+    }
+
+    function onDelete() {
+      const targets = manage
+        ? (multiMode ? Array.from(checked) : (selectedCreated === null ? [] : [selectedCreated]))
+        : [];
+      if (!targets.length) return;
+      const kept = readScaleStore().filter(r => targets.indexOf(Number(r.created)) < 0);
+      if (!writeScaleStore(kept)) {
+        showError('删除失败', '无法写入本地存储，色标未被删除。');
+        return;
+      }
+      log('已从「我的色标」中永久删除 ' + targets.length + ' 条色标。');
+      selectedCreated = null;
+      checked.clear();
+      multiMode = false;            // 删除后自动退出多选状态
+      multiBox.checked = false;
+      resetCopyLabel();
+      updateTools();
+      reload();
+      buildList();
+      refreshButtons();
+    }
+    function cleanup() {
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      delBtn.removeEventListener('click', onDelete);
+      allBtn.removeEventListener('click', onAll);
+      noneBtn.removeEventListener('click', onNone);
+      multiBox.removeEventListener('change', onMultiToggle);
+      copyBtn.removeEventListener('click', onCopy);
+      dlg.removeEventListener('close', onEsc);
+      resetCopyLabel();                     // 关掉弹窗也把文案与动画复位
+    }
+    function finish(value) {
+      cleanup();
+      dlg.close();
+      resolve(value);
+    }
+    /** 当前选中的那条（本地库按 created，预置按行号） */
+    const selectedEntry = () => entries.filter((e, i) => rowKey(e, i) === selectedCreated)[0];
+
+    function onOk() {
+      const entry = selectedEntry();
+      finish(entry ? { action: 'import', raw: entry.raw, parsed: entry.parsed } : null);
+    }
+
+    /** 「导出到剪贴板」：把选中的那条色标按「另存为」的格式复制成 JSON 文本 */
+    async function onCopy() {
+      const entry = selectedEntry();
+      if (!entry) return;
+      const text = scaleToText(scaleFromObject(entry.raw));
+      if (await copyTextToClipboard(text)) {
+        log('已把色标「' + entry.parsed.name + '」的 JSON 复制到剪贴板（'
+          + entry.parsed.nodes.length + ' 个节点）。');
+        showCopiedFeedback();
+      } else {
+        await showError('导出到剪贴板',
+          '无法写入剪贴板（浏览器可能不允许，或窗口没有焦点）。\n'
+          + '可以改用「保存色标 → 另存为」导出成 JSON 文件。');
+      }
+    }
+    function onAll() { setAllChecked(true); }
+    function onNone() { setAllChecked(false); }
+    function onCancel() { finish(null); }
+    function onEsc() { cleanup(); resolve(null); }
+
+    allBtn.addEventListener('click', onAll);
+    noneBtn.addEventListener('click', onNone);
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    delBtn.addEventListener('click', onDelete);
+    multiBox.addEventListener('change', onMultiToggle);
+    copyBtn.addEventListener('click', onCopy);
+    dlg.addEventListener('close', onEsc);
+
+    reload();
+    updateTools();
+    buildList();
+    refreshButtons();
+    dlg.showModal();
+    drawAll();
+  });
+}
+
+/** 「我的色标」：单选一条并载入 */
+async function actionMyScales() {
+  if (state.busy) return;
+  if (!storeAvailable()) {
+    await showError('我的色标', '当前浏览器不允许使用本地存储（localStorage），无法保存或读取「我的色标」。');
+    return;
+  }
+  const picked = await openScaleLibraryDialog(sortScaleRecords(readScaleStore()),
+    { title: '我的色标', okLabel: '确定', manage: false });
+  if (!picked) return;
+  await loadScaleRecord(picked.raw, '我的色标');
+}
+
+/** 「管理色标」：可多选删除、也可单选导入 */
+async function actionManageScales() {
+  if (state.busy) return;
+  if (!storeAvailable()) {
+    await showError('管理色标', '当前浏览器不允许使用本地存储（localStorage），无法管理「我的色标」。');
+    return;
+  }
+  const picked = await openScaleLibraryDialog(sortScaleRecords(readScaleStore()),
+    { title: '管理色标', okLabel: '导入', manage: true });
+  if (!picked) return;
+  await loadScaleRecord(picked.raw, '管理色标');
+}
+
+/** 从色标库记录载入为当前色标 */
+async function loadScaleRecord(raw, source) {
+  if (!await confirmDiscardChanges('打开色标')) return;
+  let scale;
+  try {
+    scale = scaleFromObject(raw);
+  } catch (e) {
+    await showError('打开失败', '这条色标记录无法使用，当前色标保持不变。\n\n' + e.message);
+    log('打开本地色标失败：' + e.message);
+    return;
+  }
+  state.scale = scale;
+  state.scaleName = null;
+  state.scaleHandle = null;
+  state.baseline = scaleToText(scale);
+  state.nodeChecked.clear();
+  refreshAll();
+  updateActionStates();
+  log('已从「' + source + '」打开：' + scale.name + '（创建于 ' + formatCreatedTime(scale.created) + '）');
+}
+
+function pickFileViaInput(inputId) {
+  return new Promise(resolve => {
+    const input = $(inputId);
+    const onChange = () => {
+      input.removeEventListener('change', onChange);
+      resolve(input.files && input.files[0] ? input.files[0] : null);
+      input.value = '';
+    };
+    input.addEventListener('change', onChange);
+    input.click();
+  });
+}
+
+/** 一次选多个文件（用于批量导入到色标库） */
+function pickFilesViaInput(inputId) {
+  return new Promise(resolve => {
+    const input = $(inputId);
+    const onChange = () => {
+      input.removeEventListener('change', onChange);
+      resolve(Array.prototype.slice.call(input.files || []));
+      input.value = '';
+    };
+    input.addEventListener('change', onChange);
+    input.click();
+  });
+}
+
+/** 选择若干 JSON 文件并读出文本（优先用原生多选） */
+async function pickConfigFiles() {
+  if (typeof window.showOpenFilePicker === 'function') {
+    try {
+      const handles = await window.showOpenFilePicker({
+        multiple: true,
+        types: [{ description: 'JSON 配置文件', accept: { 'application/json': ['.json'] } }],
+      });
+      const out = [];
+      for (const h of handles) {
+        out.push({ name: h.name, text: await (await h.getFile()).text() });
+      }
+      return out;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return null;
+      await showError('导入失败', '无法读取文件：\n' + e.message);
+      return null;
+    }
+  }
+  const files = await pickFilesViaInput('fileConfig');
+  if (!files.length) return null;
+  const out = [];
+  for (const f of files) out.push({ name: f.name, text: await f.text() });
+  return out;
+}
+
+/**
+ * 「管理色标 → 从设备导入」：把设备上的 JSON 配置收进本地色标库（localStorage）。
+ * 按 created 时间戳匹配：库里已有同一时间戳就覆盖，否则新增。不会改变当前正在编辑的色标。
+ */
+async function actionImportToStore() {
+  if (state.busy) return;
+  if (!storeAvailable()) {
+    await showError('从设备导入', '当前浏览器不允许使用本地存储（localStorage），无法导入到「我的色标」。');
+    return;
+  }
+  const picked = await pickConfigFiles();
+  if (!picked || !picked.length) return;
+
+  let store = readScaleStore();
+  const known = new Set(store.map(r => Number(r.created)));
+  const added = [], replaced = [], failed = [];
+  for (const f of picked) {
+    let rec;
+    try {
+      rec = parseScaleRecord(JSON.parse(f.text));
+    } catch (e) {
+      failed.push([f.name, e.message]);
+      log('导入失败：' + f.name + '（' + e.message + '）');
+      continue;
+    }
+    const storable = recordToStorable(rec);
+    if (known.has(storable.created)) replaced.push(f.name); else added.push(f.name);
+    known.add(storable.created);
+    store = upsertScaleRecord(store, storable);
+  }
+
+  if (!writeScaleStore(store)) {
+    await showError('导入失败', '无法写入本地存储，未导入任何色标。');
+    return;
+  }
+  if (added.length || replaced.length) {
+    log('从设备导入到「我的色标」：新增 ' + added.length + ' 条，覆盖 ' + replaced.length
+      + ' 条，库里现有 ' + store.length + ' 条。');
+  }
+  if (failed.length) {
+    await showError('导入完成',
+      '已导入 ' + (added.length + replaced.length) + ' 条到「我的色标」，'
+      + failed.length + ' 个文件失败：\n'
+      + failed.map(x => x[0] + '：' + x[1]).join('\n'));
+    return;
+  }
+  await showMessage('从设备导入',
+    '已导入 ' + (added.length + replaced.length) + ' 条色标到「我的色标」。\n'
+    + '可以在「管理色标 → 我的色标」里查看和载入。');
+}
+
+/** 丢弃当前未保存修改前先确认（新建色标 / 导入色标都会覆盖当前色标） */
+async function confirmDiscardChanges(actionLabel) {
+  if (!isDirty()) return true;
+  return await askConfirm(
+    '色标「' + state.scale.name + '」有未保存的修改，' + actionLabel + '将丢弃这些修改。\n是否继续？',
+    '继续', '取消'
+  );
+}
+
+/**
+ * 「打开色标 → 预设」：弹出内置预置色标列表（样式与「我的色标」一致，底部左「取消」右「导入」），
+ * 选一条按「导入」载入成当前色标。预置文件里没有 created，**按导入时刻生成**（见 presetToScale），
+ * 所以导入进来的是一条全新的、可以再「保存」进本地库的色标。
+ */
+async function actionPresets() {
+  if (state.busy) return false;
+  const picked = await openScaleLibraryDialog(presetRecords(),
+    { title: '预设', okLabel: '导入', presets: true });
+  if (!picked) return false;
+  const preset = presetByName(picked.parsed.name);
+  if (!preset) {
+    await showError('导入失败', '这条预置色标找不到对应数据，当前色标保持不变。');
+    return false;
+  }
+  if (!await confirmDiscardChanges('预设')) return false;
+  let scale;
+  try {
+    scale = presetToScale(preset);          // created = 导入时刻
+  } catch (e) {
+    await showError('导入失败', '这条预置色标无法使用，当前色标保持不变。\n\n' + e.message);
+    log('导入预置色标失败：' + e.message);
+    return false;
+  }
+  state.scale = scale;
+  state.scaleName = null;                   // 预置不是设备上的文件
+  state.scaleHandle = null;
+  state.baseline = scaleToText(scale);
+  state.nodeChecked.clear();
+  refreshAll();
+  updateActionStates();
+  log('已从「预设」导入：' + scale.name + '（' + scale.nodes.length + ' 个节点，'
+    + '创建时间已按导入时刻记为 ' + formatCreatedTime(scale.created) + '）。');
+  return true;
+}
+
+async function actionOpen() {
+  if (state.busy) return;
+  if (!await confirmDiscardChanges('从设备中导入')) return;
+  let text = null, name = null, handle = null;
+  if (typeof window.showOpenFilePicker === 'function') {
+    try {
+      const handles = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{ description: 'JSON 配置文件', accept: { 'application/json': ['.json'] } }],
+      });
+      handle = handles[0];
+      name = handle.name;
+      text = await (await handle.getFile()).text();
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      await showError('打开失败', '无法读取文件，当前色标保持不变。\n\n' + e.message);
+      log('打开配置失败（读取错误）：' + e.message);
+      return;
+    }
+  } else {
+    const file = await pickFileViaInput('fileConfig');
+    if (!file) return;
+    name = file.name;
+    text = await file.text();
+  }
+
+  let data;
+  try { data = JSON.parse(text); }
+  catch (e) {
+    await showError('打开失败', 'JSON 解析失败，当前色标保持不变。\n\n' + e.message);
+    log('打开配置失败（JSON 解析错误）：' + e.message);
+    return;
+  }
+  let scale;
+  try { scale = scaleFromObject(data); }
+  catch (e) {
+    await showError('打开失败', '配置内容非法，当前色标保持不变。\n\n' + e.message);
+    log('打开配置失败（内容非法）：' + e.message);
+    return;
+  }
+  state.scale = scale;
+  state.scaleHandle = handle;
+  state.scaleName = name;
+  state.baseline = scaleToText(scale);
+  state.nodeChecked.clear();
+  refreshAll();
+  log('已打开色标：' + name + '（' + scale.nodes.length + ' 个节点）');
+}
+
+/**
+ * 「保存」= 存进浏览器本地色标库（localStorage），不碰设备上已打开的文件。
+ * 按 created 毫秒时间戳匹配：同一条色标就覆盖，新色标就新增。
+ */
+function actionSave() {
+  if (state.busy) return false;
+  if (!storeAvailable()) {
+    showError('保存失败', '当前浏览器不允许使用本地存储（localStorage），无法保存到「我的色标」。');
+    log('保存失败：本地存储不可用。');
+    return false;
+  }
+  const record = scaleToObject(state.scale);
+  const next = upsertScaleRecord(readScaleStore(), record);
+  if (!writeScaleStore(next)) {
+    showError('保存失败', '无法写入本地存储，可能是浏览器存储空间不足。');
+    return false;
+  }
+  markClean();
+  updateActionStates();
+  log('已保存到「我的色标」：' + state.scale.name
+    + '（创建于 ' + formatCreatedTime(state.scale.created) + '，库里共 ' + next.length + ' 条）');
+  return true;
+}
+
+/** 「另存为」= 导出一份 JSON 到设备 */
+async function actionSaveAs() {
+  if (state.busy) return false;
+  const suggested = state.scaleName || (state.scale.name + '.json');
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: suggested,
+        types: [{ description: 'JSON 配置文件', accept: { 'application/json': ['.json'] } }],
+      });
+      const ok = await writeScale(handle, handle.name);
+      if (ok) { state.scaleHandle = handle; state.scaleName = handle.name; }
+      return ok;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return false;
+      await showError('保存失败', '无法写入文件：\n' + e.message);
+      log('保存失败：' + e.message);
+      return false;
+    }
+  }
+  let name = suggested;
+  if (!/\.json$/i.test(name)) name += '.json';
+  const ok = await writeScale(null, name);
+  if (ok) { state.scaleHandle = null; state.scaleName = name; }
+  return ok;
+}
+
+async function writeScale(handle, name) {
+  const text = scaleToText(state.scale);
+  try {
+    if (handle) await writeTextToHandle(handle, text);
+    else downloadBlob(new Blob([text], { type: 'application/json' }), name);
+    markClean();
+    log('已导出到设备：' + name);
+    return true;
+  } catch (e) {
+    await showError('保存失败', '无法写入文件：\n' + e.message);
+    log('保存失败：' + e.message);
+    return false;
+  }
+}
+
+/* =========================================================================
+ * 第 19 部分：导出（单张 / 批量）
+ * ========================================================================= */
+
+function stamp() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+async function decodeForExport(file) {
+  return await decodeImageFile(file);
+}
+
+/**
+ * 按源文件格式编码导出图：PNG -> 无损 RGBA PNG；JPG/JPEG -> JPEG（质量 0.92）。
+ * 只有 JPEG 源才会输出 JPEG，所以不会因为 JPEG 不支持 Alpha 而丢数据。
+ */
+async function encodeOutputImage(rgba, width, height, jpeg) {
+  if (!jpeg) return new Blob([await encodePNG(rgba, width, height)], { type: 'image/png' });
+  const cv = makeCanvas(width, height);
+  cv.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
+  if (typeof cv.convertToBlob === 'function') {
+    return await cv.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+  }
+  return await new Promise((resolve, reject) => {
+    cv.toBlob(b => (b ? resolve(b) : reject(new Error('JPEG 编码失败'))), 'image/jpeg', 0.92);
+  });
+}
+
+function saveFileTypes(name) {
+  return isJpegName(name)
+    ? [{ description: 'JPEG 图片', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } }]
+    : [{ description: 'PNG 图片', accept: { 'image/png': ['.png'] } }];
+}
+
+function uniqueOutName(name, used) {
+  if (!used.has(name.toLowerCase())) { used.add(name.toLowerCase()); return name; }
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  let i = 1, candidate;
+  do { candidate = stem + '(' + i + ')' + ext; i++; } while (used.has(candidate.toLowerCase()));
+  used.add(candidate.toLowerCase());
+  return candidate;
+}
+
+async function actionExportCurrent() {
+  if (state.busy) return;
+  if (state.currentIndex < 0 || !state.entries[state.currentIndex]) {
+    await showMessage('导出', '当前没有可导出的图片。');
+    return;
+  }
+  if (!state.grayFull || !state.fullSize) {
+    await showMessage('导出', '当前图片尚未加载完成，请稍候再试。');
+    return;
+  }
+  const entry = state.entries[state.currentIndex];
+  const jpeg = isJpegName(entry.displayName);
+  let blob;
+  try {
+    const rgba = colorize(state.grayFull, state.alphaFull, state.mapper, state.fullSize.width, state.fullSize.height);
+    blob = await encodeOutputImage(rgba, state.fullSize.width, state.fullSize.height, jpeg);
+  } catch (e) {
+    await showError('导出失败', '导出失败：\n' + e.message);
+    log('导出失败：' + entry.displayName + '（' + e.message + '）');
+    return;
+  }
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: entry.displayName,
+        types: saveFileTypes(entry.displayName),
+      });
+      const w = await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+      log('导出成功：' + handle.name);
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      await showError('导出失败', '导出失败：\n' + e.message);
+      log('导出失败：' + entry.displayName + '（' + e.message + '）');
+      return;
+    }
+  }
+  downloadBlob(blob, entry.displayName);
+  log('导出成功：' + entry.displayName);
+}
+
+async function uniqueDirName(dir, name) {
+  let candidate = name, i = 1;
+  for (;;) {
+    try { await dir.getDirectoryHandle(candidate); candidate = name + '(' + i + ')'; i++; }
+    catch (e) { return candidate; }
+  }
+}
+
+function setProgress(done, total, current) {
+  $('progressInner').style.width = (total ? (done / total * 100) : 0) + '%';
+  $('progressLabel').textContent = current
+    ? ('正在处理 ' + Math.min(done + 1, total) + ' / ' + total + '：' + current)
+    : ('已完成 ' + done + ' / ' + total);
+}
+
+async function actionExportBatch() {
+  if (state.busy) return;
+  const picked = state.entries.filter(e => e.checked);      // 只导出图片列表里勾选的那些
+  if (!picked.length) {
+    await showMessage('批量导出', '请选择图片');
+    return;
+  }
+  const defaultName = 'IR_Enhance_' + stamp();
+  let dirHandle = null;
+  if (typeof window.showDirectoryPicker === 'function') {
+    try {
+      dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      await showError('批量导出', '无法访问所选位置：\n' + e.message);
+      return;
+    }
+  }
+  const input = await askText('批量导出', '输出文件夹名称：', defaultName);
+  if (input === null) return;
+  const folderName = (String(input).trim() || defaultName).replace(/[\\/:*?"<>|]/g, '_');
+
+  state.batchCancel = false;
+  setBusy(true);
+  $('progressPanel').classList.remove('hidden');
+  $('btnCancelExport').disabled = false;
+  setProgress(0, picked.length, picked[0].file.name);
+
+  const failures = [];
+  const total = picked.length;
+  let cancelled = false;
+
+  try {
+    if (dirHandle) {
+      const unique = await uniqueDirName(dirHandle, folderName);
+      const outDir = await dirHandle.getDirectoryHandle(unique, { create: true });
+      log('开始批量导出，共 ' + total + ' 张 → ' + unique + '/');
+      const used = new Set();
+      for (let i = 0; i < total; i++) {
+        if (state.batchCancel) { cancelled = true; break; }
+        const entry = picked[i];
+        setProgress(i, total, entry.file.name);
+        await new Promise(r => setTimeout(r, 0));    // 让进度条先刷新
+        try {
+          const img = await decodeForExport(entry.file);
+          const rgba = colorize(img.gray, img.alpha, state.mapper, img.width, img.height);
+          const blob = await encodeOutputImage(rgba, img.width, img.height, isJpegName(entry.displayName));
+          const fname = uniqueOutName(entry.displayName, used);
+          const fh = await outDir.getFileHandle(fname, { create: true });
+          const w = await fh.createWritable();
+          await w.write(blob);
+          await w.close();
+          if (fname !== entry.displayName) log('输出文件名冲突，已改名为：' + fname);
+        } catch (e) {
+          failures.push([entry.file.name, e.message]);
+          log('导出失败：' + entry.file.name + '（' + e.message + '）');
+        }
+      }
+    } else {
+      // 回退方案：打包成 ZIP 下载（内部带同名的顶层文件夹）
+      log('当前浏览器不支持直接写文件夹，改为打包 ZIP 下载：' + folderName + '.zip');
+      const zipFiles = [];
+      const used = new Set();
+      for (let i = 0; i < total; i++) {
+        if (state.batchCancel) { cancelled = true; break; }
+        const entry = picked[i];
+        setProgress(i, total, entry.file.name);
+        await new Promise(r => setTimeout(r, 0));
+        try {
+          const img = await decodeForExport(entry.file);
+          const rgba = colorize(img.gray, img.alpha, state.mapper, img.width, img.height);
+          const blob = await encodeOutputImage(rgba, img.width, img.height, isJpegName(entry.displayName));
+          const fname = uniqueOutName(entry.displayName, used);
+          zipFiles.push({ name: folderName + '/' + fname, data: new Uint8Array(await blob.arrayBuffer()) });
+        } catch (e) {
+          failures.push([entry.file.name, e.message]);
+          log('导出失败：' + entry.file.name + '（' + e.message + '）');
+        }
+      }
+      if (!cancelled) {
+        downloadBlob(zipStore(zipFiles), folderName + '.zip');
+        log('已生成压缩包：' + folderName + '.zip（' + zipFiles.length + ' 个文件）');
+      }
+    }
+  } catch (e) {
+    failures.push(['（输出目录）', e.message]);
+    log('批量导出中断：' + e.message);
+  } finally {
+    setBusy(false);
+    $('progressPanel').classList.add('hidden');
+    $('btnCancelExport').disabled = false;
+    if (!cancelled) setProgress(total, total, '');
+  }
+
+  if (cancelled) {
+    log('批量导出已取消，已成功导出的文件保留。');
+    await showMessage('批量导出', '已取消批量导出。\n已经成功导出的文件已保留，未做回滚。');
+    return;
+  }
+  if (!failures.length) {
+    log('批量导出完成：导出成功。');
+    await showMessage('批量导出', '导出成功');
+    return;
+  }
+  const lines = failures.map(f => f[0] + '：' + f[1]);
+  log('批量导出完成，其中 ' + failures.length + ' 个文件失败。');
+  await showError('批量导出', '导出完成，但有 ' + failures.length + ' 个文件失败（其余已成功导出）：\n\n' + lines.join('\n'));
+}
+
+/* =========================================================================
+ * 第 20 部分：菜单动作
+ * ========================================================================= */
+
+async function actionQuit() {
+  if (state.busy) {
+    const ok = await askConfirm('正在批量导出，确定要停止并退出吗？\n已经成功导出的文件将保留，不做回滚。', '确定', '取消');
+    if (!ok) return;
+    state.batchCancel = true;
+  }
+  if (isDirty()) {
+    const r = await askSaveThreeWay('色标“' + state.scale.name + '”有未保存的修改，是否保存？');
+    if (r === 'cancel') return;
+    if (r === 'save') { if (!await actionSave()) return; }
+  }
+  window.close();
+  setTimeout(() => {
+    if (!window.closed) showMessage('退出', '浏览器不允许脚本关闭该页面，请直接关闭标签页。');
+  }, 250);
+}
+
+/* =========================================================================
+ * 第 20 部分：使用说明（帮助）—— 内置 Markdown 说明书 + 极简渲染器
+ *
+ * 说明书正文写在页面底部那段 type=text/markdown 的脚本块里
+ * （不执行、不显示），打开帮助时现场渲染成 HTML，左侧自动生成分节目录。
+ * ========================================================================= */
+
+function escapeHtmlText(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** 行内语法：`代码`、**粗体**、[文字](链接) */
+function renderInlineMarkdown(s) {
+  const codes = [];
+  let out = escapeHtmlText(s).replace(/`([^`]+)`/g, (m, p1) => {
+    codes.push(p1);
+    return '\u0000' + (codes.length - 1) + '\u0000';
+  });
+  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,
+    (m, text, href) => '<a href="' + href + '" target="_blank" rel="noreferrer">' + text + '</a>');
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/\u0000(\d+)\u0000/g, (m, n) => '<code>' + codes[Number(n)] + '</code>');
+  return out;
+}
+
+/**
+ * 极简 Markdown 渲染器，只覆盖说明书用到的语法：
+ * 标题（#~####）/ 段落 / 有序与无序列表（含一层缩进）/ 表格 / 代码块 / 引用 / 分隔线。
+ * 返回 { html, toc }，toc 里是二级、三级标题，供左侧目录使用。
+ */
+function renderMarkdown(md) {
+  const CJK = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+  const joinLines = ls => ls.reduce((a, b) => {
+    if (!a) return b;
+    return (CJK.test(a.slice(-1)) || CJK.test(b.charAt(0))) ? a + b : a + ' ' + b;
+  }, '');
+  const lines = String(md).replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  const toc = [];
+  const para = [];
+  const flush = () => {
+    if (para.length) { out.push('<p>' + renderInlineMarkdown(joinLines(para)) + '</p>'); para.length = 0; }
+  };
+  let sec = 0;
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 代码块
+    if (/^\s*```/.test(line)) {
+      flush();
+      i++;
+      const body = [];
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { body.push(lines[i]); i++; }
+      i++;
+      out.push('<pre><code>' + escapeHtmlText(body.join('\n')) + '</code></pre>');
+      continue;
+    }
+
+    // 标题
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      flush();
+      const level = h[1].length;
+      const raw = h[2].trim();
+      if (level === 1) {
+        out.push('<h1>' + renderInlineMarkdown(raw) + '</h1>');
+      } else {
+        sec++;
+        const id = 'help-sec-' + sec;
+        // 目录只列「章」（二级标题），小节挂在所属章下面；三级标题仍带锚点
+        if (level === 2) {
+          toc.push({ id: id, level: level, text: raw, children: [] });
+        } else if (level === 3 && toc.length) {
+          toc[toc.length - 1].children.push({ id: id, level: level, text: raw });
+        }
+        out.push('<h' + level + ' id="' + id + '">' + renderInlineMarkdown(raw) + '</h' + level + '>');
+      }
+      i++;
+      continue;
+    }
+
+    // 分隔线
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flush(); out.push('<hr>'); i++; continue; }
+
+    // 引用
+    if (/^\s*>/.test(line)) {
+      flush();
+      const body = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        body.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      out.push('<blockquote><p>' + renderInlineMarkdown(joinLines(body)) + '</p></blockquote>');
+      continue;
+    }
+
+    // 表格：本行有 |，下一行是 |---|---| 形式的分隔行
+    if (line.indexOf('|') >= 0 && i + 1 < lines.length
+        && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1])) {
+      flush();
+      const cut = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
+      const head = cut(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].indexOf('|') >= 0 && lines[i].trim()) {
+        rows.push(cut(lines[i]));
+        i++;
+      }
+      out.push('<table><thead><tr>' + head.map(c => '<th>' + renderInlineMarkdown(c) + '</th>').join('')
+        + '</tr></thead><tbody>'
+        + rows.map(r => '<tr>' + r.map(c => '<td>' + renderInlineMarkdown(c) + '</td>').join('') + '</tr>').join('')
+        + '</tbody></table>');
+      continue;
+    }
+
+    // 列表（-、*、+ 或 1. ；缩进 2 空格算一层嵌套）
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      flush();
+      let html = '';
+      const tags = [];
+      const liOpen = [false, false];         // 每一层是否有没闭合的 <li>
+      const closeLiAt = lv => { if (liOpen[lv]) { html += '</li>'; liOpen[lv] = false; } };
+      const closeList = () => {
+        const lv = tags.length - 1;
+        closeLiAt(lv);
+        if (tags.length) html += '</' + tags.pop() + '>';
+      };
+      while (i < lines.length) {
+        const m = /^(\s*)([-*+]|\d+\.)\s+(.*)$/.exec(lines[i]);
+        if (!m) break;
+        const nestedItem = tags.length > 0 && m[1].replace(/\t/g, '  ').length >= 2;
+        const t = /\d/.test(m[2]) ? 'ol' : 'ul';
+        if (!nestedItem) {
+          while (tags.length > 1) closeList();
+          if (!tags.length) { tags.push(t); html += '<' + t + '>'; }
+          closeLiAt(0);
+          html += '<li>' + renderInlineMarkdown(m[3].trim());
+          liOpen[0] = true;
+        } else {
+          if (tags.length < 2) { tags.push(t); html += '<' + t + '>'; }
+          else if (tags[1] !== t) { closeList(); tags.push(t); html += '<' + t + '>'; }
+          closeLiAt(1);
+          html += '<li>' + renderInlineMarkdown(m[3].trim());
+          liOpen[1] = true;
+        }
+        i++;
+      }
+      while (tags.length) closeList();
+      out.push(html);
+      continue;
+    }
+
+    // 空行 = 段落结束
+    if (!line.trim()) { flush(); i++; continue; }
+
+    para.push(line.trim());
+    i++;
+  }
+  flush();
+  return { html: out.join('\n'), toc: toc };
+}
+
+/** 说明书的 Markdown 源（页面里那段不执行的 script） */
+function helpMarkdownSource() {
+  const el = $('helpMarkdown');
+  return el ? el.textContent.replace(/^\s*\n/, '').replace(/\s+$/, '') : '';
+}
+
+let helpRendered = false;
+let helpExpanded = null;     // 当前展开小节的章 id（默认都收起）
+let helpPin = null;          // 刚点过的目录项：滚动到位期间保持它高亮
+let helpPinUntil = 0;
+
+function helpScrollTo(id) {
+  const doc = $('helpDoc');
+  const el = doc.querySelector('#' + id);
+  if (!el) return;
+  const delta = el.getBoundingClientRect().top - doc.getBoundingClientRect().top;
+  doc.scrollTop = Math.max(0, doc.scrollTop + delta - 8);
+  helpPin = id;
+  helpPinUntil = Date.now() + 500;   // 最后一节可能滚不到顶，期间不让高亮被改回去
+  markActiveHelpSection();
+}
+
+function markActiveHelpSection() {
+  const doc = $('helpDoc');
+  const buttons = $('helpNav').querySelectorAll('button');
+  if (!buttons.length) return;
+  if (helpPin && Date.now() < helpPinUntil) {
+    Array.prototype.forEach.call(buttons, b => {
+      b.classList.toggle('active', b.dataset.target === helpPin);
+    });
+    return;
+  }
+  helpPin = null;
+  const base = doc.getBoundingClientRect().top;
+  let active = buttons[0].dataset.target;
+  Array.prototype.forEach.call(buttons, b => {
+    const el = doc.querySelector('#' + b.dataset.target);
+    if (el && el.getBoundingClientRect().top - base <= 16) active = b.dataset.target;
+  });
+  Array.prototype.forEach.call(buttons, b => {
+    b.classList.toggle('active', b.dataset.target === active);
+  });
+}
+
+/** 展开某一章的小节（再点一次收起）；同时只展开一章 */
+function setHelpExpanded(id) {
+  helpExpanded = (helpExpanded === id) ? null : id;
+  Array.prototype.forEach.call($('helpNav').querySelectorAll('.hn-group'), g => {
+    const on = g.dataset.target === helpExpanded;
+    g.classList.toggle('open', on);
+    const caret = g.querySelector('.hn-caret');
+    if (caret && caret.textContent) caret.textContent = on ? '▾' : '▸';
+  });
+}
+
+/** 打开「帮助 → 使用说明」：左侧分节目录 + 右侧渲染后的说明书 */
+function showHelp() {
+  const dlg = $('helpDialog');
+  if (!helpRendered) {
+    const r = renderMarkdown(helpMarkdownSource());
+    $('helpDoc').innerHTML = r.html;
+    const nav = $('helpNav');
+    nav.innerHTML = '';
+    r.toc.forEach(ch => {
+      const group = document.createElement('div');
+      group.className = 'hn-group';
+      group.dataset.target = ch.id;
+
+      const top = document.createElement('button');
+      top.type = 'button';
+      top.className = 'hn-top';
+      top.dataset.target = ch.id;
+      top.title = ch.text;
+      const caret = document.createElement('span');
+      caret.className = 'hn-caret';
+      caret.textContent = ch.children.length ? '▸' : '';     // 有小节才显示折叠箭头
+      const label = document.createElement('span');
+      label.className = 'hn-label';
+      label.textContent = ch.text;
+      top.appendChild(caret);
+      top.appendChild(label);
+      top.addEventListener('click', () => {
+        helpScrollTo(ch.id);
+        if (ch.children.length) setHelpExpanded(ch.id);
+        else helpExpanded = null;
+      });
+      group.appendChild(top);
+
+      ch.children.forEach(sub => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'hn-sub';
+        b.dataset.target = sub.id;
+        b.title = sub.text;
+        b.textContent = sub.text;
+        b.addEventListener('click', () => helpScrollTo(sub.id));
+        group.appendChild(b);
+      });
+      nav.appendChild(group);
+    });
+    $('helpDoc').addEventListener('scroll', markActiveHelpSection);
+    $('helpClose').addEventListener('click', () => dlg.close());
+    helpRendered = true;
+  }
+  $('helpDoc').scrollTop = 0;
+  if (!dlg.open) dlg.showModal();
+  markActiveHelpSection();
+}
+
+function handleAction(act) {
+  switch (act) {
+    case 'presets': actionPresets(); break;
+    case 'myScales': actionMyScales(); break;
+    case 'manageScales': actionManageScales(); break;
+    case 'importToStore': actionImportToStore(); break;
+    case 'open': actionOpen(); break;
+    case 'inputScale': actionInputScale(); break;
+    case 'save': actionSave(); break;
+    case 'saveas': actionSaveAs(); break;
+    case 'exportOne': actionExportCurrent(); break;
+    case 'exportBatch': actionExportBatch(); break;
+    case 'quit': actionQuit(); break;
+    case 'help': showHelp(); break;          // 菜单栏「帮助」= 直接打开使用说明
+  }
+}
+
+/* =========================================================================
+ * 第 21 部分：事件绑定与初始化
+ * ========================================================================= */
+
+function closeAllMenus() {
+  document.querySelectorAll('.menu.open').forEach(m => m.classList.remove('open'));
+}
+
+function bindUI() {
+  // 菜单栏 + 面板下拉按钮组
+  document.querySelectorAll('.menu').forEach(menu => {
+    const title = menu.querySelector('.mt') || menu.querySelector('.dropbtn');
+    if (!title) return;
+    title.addEventListener('click', e => {
+      e.stopPropagation();
+      if (title.disabled) return;
+      const wasOpen = menu.classList.contains('open');
+      closeAllMenus();
+      if (!wasOpen) menu.classList.add('open');
+    });
+    title.addEventListener('mouseenter', () => {
+      if (document.querySelector('.menu.open')) { closeAllMenus(); menu.classList.add('open'); }
+    });
+  });
+  document.addEventListener('click', closeAllMenus);
+  document.querySelectorAll('[data-act]').forEach(el => {
+    el.addEventListener('click', () => {
+      const act = el.dataset.act;
+      closeAllMenus();
+      if (el.classList.contains('disabled') || el.disabled) return;
+      handleAction(act);
+    });
+  });
+
+  // 色标名称
+  const nameInput = $('scaleName');
+  const commitName = () => {
+    const text = nameInput.value;
+    if (!text.trim()) {
+      log('色标名称不能为空或全空白，已恢复为之前的名称。');
+      nameInput.value = state.scale.name;
+      return;
+    }
+    if (text !== state.scale.name) {
+      state.scale.name = text.trim();
+      nameInput.value = state.scale.name;
+      updateTitle();
+    }
+  };
+  nameInput.addEventListener('blur', commitName);
+  nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); nameInput.blur(); } });
+
+  // 单位
+  $('unitSelect').addEventListener('change', e => {
+    state.unit = e.target.value;
+    updateRangeInputs();
+    drawLegend();
+    renderNodeCards();
+    log('显示单位切换为：' + state.unit);
+  });
+
+  // 温度上下限（输入框内只填数字，单位取当前全局单位）
+  ['imageRangeUpper', 'imageRangeLower'].forEach(id => {
+    const el = $(id);
+    el.addEventListener('blur', commitRange);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } });
+  });
+
+  // 节点选择模式
+  $('nodeSelectMode').addEventListener('change', e => {
+    state.nodeSelMode = e.target.checked;
+    if (!state.nodeSelMode) state.nodeChecked.clear();   // 退出选择状态：清除所有勾选
+    updateSelectionButtons();
+    renderNodeCards();
+  });
+  $('btnAddNode').addEventListener('click', addNode);
+  $('btnNodeAll').addEventListener('click', () => {
+    state.nodeChecked = new Set(state.scale.nodes.filter(n => !isPinned(n)).map(n => n.uid));
+    renderNodeCards();
+  });
+  $('btnNodeNone').addEventListener('click', () => { state.nodeChecked.clear(); renderNodeCards(); });
+  $('btnNodeDelete').addEventListener('click', deleteCheckedNodes);
+
+  // 图片选择模式
+  $('imgSelectMode').addEventListener('change', e => {
+    state.imgSelMode = e.target.checked;
+    if (!state.imgSelMode) state.entries.forEach(x => { x.checked = false; });
+    updateSelectionButtons();
+    renderImageList();
+  });
+  $('btnImgAll').addEventListener('click', () => { state.entries.forEach(x => { x.checked = true; }); renderImageList(); });
+  $('btnImgNone').addEventListener('click', () => { state.entries.forEach(x => { x.checked = false; }); renderImageList(); });
+  $('btnImgDelete').addEventListener('click', deleteSelectedImages);
+  $('btnAddImages').addEventListener('click', () => { if (!state.busy) $('fileImages').click(); });
+  $('fileImages').addEventListener('change', async e => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length) await addImages(files);
+  });
+
+  // 日志
+  $('btnClearLog').addEventListener('click', () => { $('logView').innerHTML = ''; });
+
+  // 预览：重置视图 / 缩放 / 平移
+  $('btnResetView').addEventListener('click', resetPreviewView);
+  const cv = $('previewCanvas');
+  cv.addEventListener('wheel', e => {
+    if (!state.offscreen || state.busy) return;
+    e.preventDefault();
+    const rect = cv.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const p = state.preview;
+    const factor = Math.pow(1.25, -e.deltaY / 120);
+    const ns = Math.max(0.02, Math.min(p.scale * factor, 64));
+    if (Math.abs(ns - p.scale) < 1e-9) return;
+    const ix = (mx - p.ox) / p.scale, iy = (my - p.oy) / p.scale;
+    p.scale = ns;
+    p.ox = mx - ix * ns;
+    p.oy = my - iy * ns;
+    p.fit = false;
+    drawPreview();
+  }, { passive: false });
+  cv.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || !state.offscreen || state.busy) return;
+    state.panning = true;
+    state.panStart = { x: e.clientX, y: e.clientY };
+    state.panOrigin = { x: state.preview.ox, y: state.preview.oy };
+    cv.setPointerCapture(e.pointerId);
+    cv.style.cursor = 'grabbing';
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!state.panning) return;
+    state.preview.ox = state.panOrigin.x + (e.clientX - state.panStart.x);
+    state.preview.oy = state.panOrigin.y + (e.clientY - state.panStart.y);
+    state.preview.fit = false;
+    drawPreview();
+  });
+  const endPan = e => {
+    if (!state.panning) return;
+    state.panning = false;
+    cv.style.cursor = '';
+    try { cv.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  };
+  cv.addEventListener('pointerup', endPan);
+  cv.addEventListener('pointercancel', endPan);
+
+  // 批量导出取消
+  $('btnCancelExport').addEventListener('click', () => {
+    if (state.busy) {
+      state.batchCancel = true;
+      $('btnCancelExport').disabled = true;
+      $('progressLabel').textContent = '正在取消，等待当前文件处理完成…';
+      log('用户取消了批量导出。');
+    }
+  });
+
+  // 尺寸变化：合并到下一帧执行，避免在 ResizeObserver 回调里同步改布局
+  let resizePending = false;
+  const onResize = () => {
+    if (resizePending) return;
+    resizePending = true;
+    requestAnimationFrame(() => {
+      resizePending = false;
+      if (state.preview.fit) applyFit();
+      drawPreview();
+      drawLegend();
+    });
+  };
+  window.addEventListener('resize', onResize);
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(onResize);
+    ro.observe($('previewWrap'));
+    ro.observe($('legendWrap'));
+  }
+
+  // 退出前提醒
+  window.addEventListener('beforeunload', e => {
+    if (state.busy || isDirty()) { e.preventDefault(); e.returnValue = ''; return ''; }
+  });
+
+  // 不支持拖拽导入：阻止把图片拖到页面上（否则浏览器会直接打开该文件）
+  ['dragover', 'drop'].forEach(evt => {
+    window.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
+  });
+}
+
+function init() {
+  nodeColorEditor = new ColorEditor('nodeDlgPreview', 'nodeDlgHex', 'nodeDlgR', 'nodeDlgG', 'nodeDlgB',
+                                    'nodeDlgPick');
+  bindUI();
+  state.mapper = new ColorMapper(state.scale.nodes);
+  state.baseline = scaleToText(state.scale);
+  $('unitSelect').value = state.unit;
+  refreshAll();
+  updateActionStates();
+  setBusy(false);
+  log('程序已启动。默认色标：50°C 黑色 → -85°C 白色。');
+  log('温度映射：T = 50 - 135 × p / 255。');
+  if (!hasCompressionStream()) {
+    log('警告：当前浏览器不支持 DecompressionStream，将使用浏览器解码/编码，半透明像素可能有 ±1~2 灰度误差。');
+  }
+  if (!canUseFS) {
+    log('提示：当前浏览器不支持原生「另存为 / 选择文件夹」，将改用下载方式保存。建议使用 Edge 或 Chrome。');
+  }
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
+</script>
+
+<!-- =====================================================================
+     使用说明正文（Markdown 源）。type 不是 text/javascript，浏览器不会执行，
+     只在「帮助 → 使用说明」里由 renderMarkdown() 现场渲染成 HTML。
+     ===================================================================== -->
+<script type="text/markdown" id="helpMarkdown">
+# 红外灰度色标增强工具 · 使用说明
+
+> **单文件、离线、零安装**：双击 `index.html`，用 Edge 或 Chrome 打开即可（在文件上右键 →「打开方式」→ Edge / Chrome）。所有处理都在本机完成，图片不会上传，也不需要联网。
+
+本文共 12 章，左侧目录点一下就能跳过去；带 ▸ 的章节点开后会展开小节。
+
+## 1. 上手
+
+### 1.1 这个工具做什么
+
+把红外灰度图（**PNG / JPG**）按「灰度值 → 物理温度 → 颜色」的固定映射重新着色成彩色图，并导出为**与源文件同格式、同分辨率**的图片。
+
+- **灰度 → 温度**：`T = 上限 - (上限 - 下限) × p / 255`，`p` 是 0~255 的灰度值，上下限在预览区顶部设定。
+- **温度 → 颜色**：由色标决定。色标是一串「温度 + 颜色」节点，节点之间 RGB 三通道分别线性插值；两个节点温度相同时形成硬跳变。
+- **温度范围属于图片，不属于色标**：切换色标只换配色方案，不改变「某个灰度代表多少度」。
+
+### 1.2 快速开始（三步）
+
+1. 点右上角 **「添加图片」**，选一张或多张 PNG / JPG（可多选；不支持拖拽）。
+2. 看一眼预览区顶部的 **温度范围（°C）** 上下限（默认 50 / -85），需要就改；再点 **打开色标 → 预设** 挑一套现成色标（内置 8 套，含标准 BD 色阶；想从零搭就选「空白」）。
+3. 点 **导出图片 → 单张导出**（导出当前预览的那张）或 **批量导出**（先勾选要导出的图片）。
+
+### 1.3 界面总览
+
+| 区域 | 内容 |
+| --- | --- |
+| 顶部菜单栏 | 左：帮助（使用说明 / 关于）；右：退出 |
+| 左侧大区 | 图片预览；标题栏含「温度范围（°C）上限 / 下限」两个输入框和「重置视图」按钮 |
+| 中间色标列 | 上方：三组下拉按钮 + 色标名称 + 单位 + 只读的色标范围；下方左「细色标柱 + 温度刻度」、右「色标节点卡片列表」 |
+| 右侧图片列表 | 缩略图 + 显示名，当前预览行浅蓝底；顶部「选择」开关与「导出图片」，底部「添加图片」与「删除选中」 |
+| 底部运行日志 | 每步操作都带时间戳，「清空日志」可清屏 |
+
+按钮与菜单一览：
+
+| 按钮 | 位置 | 里面有什么 |
+| --- | --- | --- |
+| 打开色标 | 中间列最上方 | **预设** / 我的色标 / 从设备中导入 / 输入色标 |
+| 管理色标 | 中间列，夹在「打开色标」与「保存色标」之间 | 我的色标（管理弹窗）/ 从设备导入（收进色标库） |
+| 保存色标 | 中间列最上方 | 保存 / 另存为 |
+| 导出图片 | 图片列表上方 | 单张导出（当前预览）/ 批量导出（已勾选的图片） |
+
+## 2. 温度范围（属于图片）
+
+- 输入框在**预览区标题与「重置视图」之间**，默认 **上限 50°C / 下限 -85°C**。
+- 上限对应灰度值 0（最黑），下限对应灰度值 255（最白）。
+- 修改后立即重新给预览上色，**不会改动任何色标节点**。
+- 校验规则：必须是数字、上限必须大于下限、范围必须落在 **-272.15°C ~ 1726.85°C**（内部 1 K ~ 2000 K）之间；非法时弹提示并**恢复原值**。
+- 单位切换（°C / °F / K / 亮度）时这两个框会自动换算显示，但温度本身不变。
+
+## 3. 色标与节点
+
+### 3.1 连续插值与色标范围
+
+- 每个节点 = 一个温度 + 一个颜色；相邻节点之间**线性插值**，所以看到的是一条连续色带。
+- 色标范围（只读显示，例如 `50°C ~ -85°C`）由**最高温节点**和**最低温节点**决定，不能直接编辑，只能通过改节点位置来改。
+- 相邻节点颜色相同时，中间就是一段纯色平台（标准 BD 色阶大量使用这种做法）。
+
+### 3.2 同一温度的两个节点 = 硬跳变
+
+- **同一个位置最多允许 2 个节点**（位置精度 0.01 K）。两个节点同温时，色带上出现一条硬跳变。
+- 这两个节点在节点列表里会并成一组共边框的卡片，分界线上骑着一个 **⇅ 双箭头按钮**，点一下交换两者顺序 —— 也就是改变硬跳变的方向（上面什么颜色、下面什么颜色）。
+- 取色规则：**跳变上方取「靠上」那个节点的颜色，下方取「靠下」那个节点的颜色**；最冷端（图片温度低于色标最低温）的拉伸也取**最下方节点**的颜色。
+- 横向 legend（弹窗里）与竖向 legend（第二列色标柱）以及图片着色使用同一套算法，三者结果永远一致。
+
+### 3.3 保留节点
+
+- 新建色标默认是「一个**保留节点** 50°C 黑色 + 一个普通节点 -85°C 白色」。
+- 保留节点卡片上带「保留」标记：**只禁止删除**，位置与颜色都能改；它不参与批量勾选，「全选」不会勾中它，无论怎么删都至少留下它。
+- 也就是说，色标里永远至少有一个节点。
+
+### 3.4 新增 / 编辑 / 交换 / 删除
+
+- **添加节点**：点节点列表上方的「添加节点」，默认落在当前最宽的温度空档中间，可以在对话框里改位置和颜色。
+- **编辑节点**：点节点卡片打开对话框。位置只填数字（不带单位，按当前全局单位解释）；颜色支持 **Windows 原生取色器、HEX、R G B** 三向同步，HEX/RGB 非法时失焦会提示并回退。
+- **删除节点**：打开节点列表顶部的「选择」开关，勾选后点「删除选中」；一个都没勾会提示「请选择节点」。
+- 节点温度允许范围 **-272.15°C ~ 1726.85°C**（1 K ~ 2000 K），同一位置超过 2 个节点会被拒绝。
+
+### 3.5 色标与图片范围不一致时（拉伸 / 截断）
+
+所有 legend 的温度轴都等于**图片温度范围**，所以：
+
+| 情况 | legend 表现 |
+| --- | --- |
+| 色标比图片范围**窄**（例如色标 -80~28，图片 -85~50） | 两端节点颜色被**拉伸**到图片上下限 |
+| 色标比图片范围**宽**（例如色标 -200~200） | 只显示图片范围内那一段，超出部分**截断**不显示 |
+
+- 图片温度**高于色标最高温节点** → 一律取最高温节点的颜色；**低于最低温节点** → 取最低温节点的颜色。
+- 这套规则同样作用于「我的色标 / 管理色标」弹窗里的横向 legend，因此列表里所有色标可以直接横向对比。
+
+## 4. 预设色标
+
+**打开色标 → 预设** 会弹出内置的预置色标列表：样式与「我的色标」一样（每条一条横向 legend + 名称），
+底部是左 **取消** 右 **导入**。选中一条按「导入」，它就变成当前正在编辑的色标。
+
+| 预设 | 节点数 | 色标范围 | 说明 |
+| --- | --- | --- | --- |
+| **空白** | 1 | 0°C 一个点 | 单个白色保留节点 → 整幅纯白，用来从零搭一套色标 |
+| BW | 2 | 50 ~ -85°C | 黑白连续色标（与程序启动时的默认色标相同） |
+| IR-BD | 18 | 28 ~ -81°C | 标准 BD 色阶（早期版本） |
+| IR-BD-ex | 24 | 28 ~ -93°C | 标准 BD 色阶扩展版，冷端多了三段深灰平台 |
+| IR-CC | 19 | 28 ~ -85°C | 彩色增强（红 / 橙 / 黄 / 青 / 蓝） |
+| OTT | 16 | 28 ~ -90°C | OTT 配色 |
+| RAMMB | 14 | 35 ~ -100°C | RAMMB 配色，色标宽度覆盖整个默认图片范围 |
+| RBTOP | 20 | 50 ~ -100°C | RBTOP 配色 |
+
+- **预设文件里没有 `created`**：`created`（毫秒时间戳）是色标的身份，**只在导入的那一刻生成**。
+  所以每导入一次就是一条**全新的**色标，可以再点「保存色标 → 保存」把它存进本地色标库，
+  之后它就和预设无关了（改它、删它都不会影响预设本身）。
+- 预设**不会**自动进本地色标库：程序启动时不再往 localStorage 里塞任何东西，
+  列表来自随工具发行的那份数据（源文件见项目里的 `PreSet/*.json`）。
+- 导入的色标出现在标题栏名字里（例如 `IR-BD-ex`），此时不带 `*`（视为已保存状态），
+  但**没有**对应文件，按「保存」只会存进本地色标库。
+- 当前色标有未保存修改时，选完预设按「导入」会先问一次「是否继续」，取消则什么都不变。
+- 想再要一份「干净的空白色标」，导入 **空白** 即可（这就是原来「新色标」的用法）。
+
+预置数据的来源：`PreSet/` 目录里放着这 8 份色标 JSON（文件名与预设名不一定相同，
+例如 `IR-RBTOP.json` 里写的是 `RBTOP`），`index.html` 里内嵌的是它们的副本。
+改了 JSON 之后，用下面第一条命令可以把它们重新同步进 `index.html`，
+第二条只检查两边是否一致（不一致时退出码为 1）：
+
+```powershell
+python build/gen_presets.py
+python build/gen_presets.py --check
+```
+
+## 5. 色标库
+
+### 5.1 色标身份 = 毫秒时间戳
+
+- 每个色标都有一个毫秒级创建时间戳 `created`，它是色标的**唯一身份**，一经创建永不修改；名称只是标签，随时可改。
+- 同一时间戳 = 同一条色标（保存时覆盖）；不同时间戳 = 两个色标（哪怕名字完全一样）。
+
+### 5.2 保存 / 另存为
+
+- **保存**：写入浏览器本地色标库（localStorage 的 `ir_enhancer.scales.v1`），**不会**动设备上已打开的文件。
+- **另存为**：导出一份 JSON 到设备（Windows 原生另存为；不支持的浏览器改为下载）。
+- 有未保存修改时窗口标题会带 `*`；新建 / 载入 / 导入前会先问「是否保存」，直接关页面也会提醒。
+
+### 5.3 我的色标
+
+- 打开色标 → 我的色标：列出本地库里的色标，每条显示**横向 legend + 名称 + 创建时间**（`创建于YYYYMMDD HH:mm:SS`）。
+- 横向 legend 以**当前图片温度范围**为温度轴，方便横向比较不同色标。
+- 点一条选中，按 **确定** 载入（未选中时「确定」是禁用的）；底部左「取消」右「确定」。
+- 底部的 **「导出到剪贴板」** 在**单选一条之后**才可用（多选状态下不可用）：点一下就把这条色标的 JSON 复制走，
+  内容与「另存为」导出的文件完全一样，可以直接粘到聊天窗口、记事本，或用下面的「输入色标」再贴回来。
+- 复制成功后按钮显示 **「已复制」**（蓝色高亮）：**最多停留 2 秒**，随后逐渐隐去并切回「导出到剪贴板」。
+  这 2 秒里如果**换了选中的色标**（或切了「多选」、删了记录、关掉弹窗），会**立刻**切回原文案，
+  正在进行的渐隐动画也会直接中断；弹窗**每次打开都是「导出到剪贴板」**。
+
+### 5.4 管理色标
+
+- 管理色标 → 我的色标：同一个弹窗的增强版，右上角多了「多选」勾选框和红色「删除」按钮。
+- 勾上「多选」后，每条左侧出现勾选框，并多出「全选 / 全不选」；勾选后即可**从本地库永久删除**，删除完成自动退出多选状态。
+- 不勾「多选」时是单选：选一条后「导入」和「删除」同时可用（可单独导入或删除）。底部左「取消」右「导入」。
+- 「导出到剪贴板」在这个弹窗里同样有，**只认单选**：一勾「多选」它就变灰。
+
+### 5.5 两个「从设备…」的区别
+
+| 入口 | 作用 |
+| --- | --- |
+| 打开色标 → 从设备中导入 | 读一份 JSON，**载入成当前正在编辑的色标**（不动本地库） |
+| 管理色标 → 从设备导入 | 读一份或多份 JSON，**收进本地色标库**（按时间戳覆盖或新增），不改动当前色标 |
+
+### 5.6 输入色标（直接粘贴文本）
+
+**打开色标 → 输入色标**：弹出一个文本框，把一段色标 JSON 粘进去按「确定」就载入成当前色标，不用先存成文件。
+
+- 文本框里粘贴的内容，就是「导出到剪贴板」/「另存为」拿到的那种 JSON（`created` / `name` / `nodes`）。
+- **就地校验**：JSON 格式错、字段缺失、颜色写法不对、节点温度超出 1 K ~ 2000 K、同一位置超过 2 个节点……
+  都会在文本框下方用红字说明**具体原因**，弹窗**不会关**，文本也不会丢，改完再按「确定」即可。
+- 校验通过后才会替换当前色标；如果当前色标有未保存的修改，会先问一次「是否继续」（和新建 / 导入的规则一样）。
+- 文本里没有 `created` 时会自动补上当前时间戳（它就成了一条新色标，可以用「保存色标 → 保存」存进本地库）。
+- 载入后开头不带 `*`（视为已保存状态），但**没有**对应文件，所以「保存」只会存进本地色标库。
+- 取消 / Esc 都不会改动当前色标。
+
+## 6. 配置文件（JSON）格式
+
+导出的色标就是这样一个 JSON，可以直接手改后再导入（**打开色标 → 输入色标** 可以直接粘贴这段文本，
+不必先存成文件）：
+
+```json
+{
+  "created": 1735660800000,
+  "name": "IR-BD",
+  "nodes": [
+    { "temperature_k": 301.15, "color": "#000000", "pinned": true },
+    { "temperature_k": 282.15, "color": "#F7F7F7" },
+    { "temperature_k": 193.15, "color": "#555555" }
+  ]
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `created` | 可选 | 毫秒时间戳，色标身份；缺失或非法时自动补当前时间 |
+| `name` | 可选 | 色标名称；缺失或为空时用「未命名色标」 |
+| `nodes` | **必填** | 节点数组，至少 1 个 |
+| `nodes[].temperature_k` | **必填** | 节点温度，单位 **Kelvin**，允许 1.0 ~ 2000.0 |
+| `nodes[].color` | **必填** | 颜色，`#RRGGBB`（也认 `#RGB`） |
+| `nodes[].pinned` | 可选 | `true` 表示保留节点（不可删除） |
+
+校验规则：顶层必须是对象；同一位置（0.01 K 精度）最多 2 个节点；**温度范围不在色标里**（旧文件里遗留的 `range` 字段会被直接忽略）。任何一条不满足都会给出具体原因，并且**当前色标保持不变**。
+
+## 7. 图片管理
+
+- 支持 **PNG**（单通道灰度 + Alpha / RGB / RGBA / 调色板 / 16 位灰度）与 **JPG / JPEG**，一次可选多张。
+- 只能通过「添加图片」按钮打开 Windows 原生文件选择器，**不支持拖拽**导入。
+- 允许重复导入同一张图，显示名自动加后缀：`image.png` → `image(1).png` → `image(2).png`（导出时按显示名写文件，不会互相覆盖）。
+- 图片列表在窗口最右侧：缩略图保持比例不裁剪、文件名过长省略并带悬停提示、当前预览行浅蓝底。
+- 单击切换预览；打开「选择」开关后，点击只切换勾选、不切换预览，点「删除选中」批量删除（没勾选会提示「请选择图片」）。
+- 图片**按需从磁盘读取**，同一时刻只有当前图片驻留内存，几十上百张也不会把内存吃满。
+
+## 8. 预览与视图操作
+
+- 默认 Fit（整幅适应窗口），窗口大小变化时自动重新适应。
+- **滚轮缩放**：以鼠标位置为中心，1.25 倍一档，范围 0.02× ~ 64×。
+- **拖动平移**：按住左键拖动。
+- **重置视图**：只把缩放和平移恢复成 Fit，**不改变**色标与图片数据。
+- 预览上色与 legend 使用同一个 `ColorMapper`，所以「预览里看到的颜色」就是导出后的颜色。
+
+## 9. 导出图片
+
+- **格式跟随源文件**：PNG 进 PNG 出（无损、Alpha 原样保留）；JPG 进 JPG 出（质量 0.92，无 Alpha）。
+- **单张导出**：导出当前预览的那张，保持原分辨率；用 Windows 原生「另存为」，不支持的浏览器改为下载。
+- **批量导出**：只导出图片列表里**已勾选**的图片（一张都没勾时提示「请选择图片」）。
+- 批量导出流程：先选目标文件夹 → 修改输出文件夹名（默认 `IR_Enhance_YYYYMMDD_HHMMSS`，同名自动追加 `(1)(2)…`，绝不覆盖已有文件）→ 进度条与 `正在处理 37 / 120：filename.png` → 可随时取消。
+- 单个文件失败会跳过并在结束时汇总原因，**已成功导出的文件保留**（不回滚）；导出期间界面锁定，避免误操作。
+- 浏览器不支持直接写文件夹时，批量导出会改为**打包成 ZIP 下载**（内部带同名的顶层文件夹）。
+
+## 10. 单位与显示精度
+
+- 单位下拉框只影响**显示与输入**，内部一律以 Kelvin 存储，导出不受影响。
+- `°C` / `°F` / `K`：常规温标换算。
+- `亮度`：把图片温度范围线性映射成 0（上限）~ 255（下限），刻度每 10°C 一个整数，适合和灰度原图直接对照。
+- 温度与节点位置保存精度统一为 **0.01 K**，使用银行家舍入（round-half-even），所以 `200.125 → 200.12`、`200.135 → 200.14`。
+
+## 11. 实现细节
+
+- **PNG 由本程序自行解码 / 编码**（直接处理 PNG 数据块），灰度与 Alpha **逐字节精确**，不会因为 canvas 预乘 Alpha 往返而掉 1~2 级灰度。
+- JPG 没有 Alpha 通道，按整幅不透明处理，走浏览器解码 / 编码。
+- 颜色映射按 **0.01 K**（等于配置文件精度）对齐节点位置，所以「屏幕上的色标」与「保存后重新打开的色标」逐灰度完全一致。
+- 横向 legend、竖向 legend 与图片着色共用同一个算法，任何情况下取色结果都一致。
+- 需要 Edge / Chrome 等现代浏览器（用到 `DecompressionStream`、`dialog`、原生文件选择器）。缺少 `DecompressionStream` 时会退回浏览器解码，半透明像素可能有 ±1~2 灰度误差，日志会给出警告。
+- 本地色标库使用 `localStorage`；浏览器禁用本地存储时会明确提示，保存 / 读取都不会静默失败。
+
+## 12. 常见问题
+
+- **导出后颜色和预览不一样？** 检查是否误改了「温度范围」，或导出的是另一张图片（批量导出只处理勾选的那些）。
+- **为什么改色标温度没反应？** 色标范围比图片范围宽时，图片那段只是色标的一小部分；把色标范围调到覆盖图片范围更有意义。
+- **为什么删除按钮是灰的？** 「删除」在没勾选（或多选下没勾任何一条）时是禁用的；保留节点永远不能删。
+- **同一温度放了两个节点，色带方向反了？** 点两个卡片之间的 **⇅** 按钮交换顺序即可。
+- **从「预设」导入的色标，时间戳是哪来的？** 预设文件里没有 created，所以按**导入那一刻**生成；每导入一次都是新的一条，可以各自命名后分别保存。
+- **换电脑 / 换浏览器后色标不见了？** 色标库存在浏览器的 localStorage 里，不会跟着文件走。用「另存为」导出 JSON，在新环境里「从设备中导入」即可。
+- **怎么把一套色标发给别人？** 在「我的色标」里选中它，点 **「导出到剪贴板」**，把复制出来的 JSON 发给对方；对方用 **打开色标 →「输入色标」** 粘进去按确定就能用（或存成 `.json` 文件用「从设备中导入」）。
+- **「导出到剪贴板」为什么是灰的？** 它只认**单选**：先在「我的色标 / 管理色标」里点中一条；勾了「多选」时也会变灰。
+- **提示「无法写入剪贴板」怎么办？** 浏览器可能不允许脚本写剪贴板，或窗口没有焦点。改用「保存色标 → 另存为」导出成 JSON 文件即可。
+- **粘贴的色标提示「配置内容非法」？** 照着红字说明改（通常是温度单位写成了摄氏度，或者颜色少写了 `#`）；`temperature_k` 必须是以 **Kelvin** 为单位的数字。
+</script>
+</body>
+</html>

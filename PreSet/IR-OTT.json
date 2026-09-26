@@ -1,0 +1,21 @@
+{
+  "name": "OTT",
+  "nodes": [
+    {"temperature_k": 301.15,"color": "#000000","pinned": true},
+    {"temperature_k": 253.15,"color": "#C8C8C8"},
+    {"temperature_k": 253.15,"color": "#00FFFF"},
+    {"temperature_k": 243.15,"color": "#000475"},
+    {"temperature_k": 233.15,"color": "#00F902"},
+    {"temperature_k": 233.15,"color": "#00FF00"},
+    {"temperature_k": 223.15,"color": "#F9FF00"},
+    {"temperature_k": 223.15,"color": "#FFFF00"},
+    {"temperature_k": 213.15,"color": "#FF0700"},
+    {"temperature_k": 213.15,"color": "#FF0000"},
+    {"temperature_k": 203.15,"color": "#070000"},
+    {"temperature_k": 203.15,"color": "#000000"},
+    {"temperature_k": 193.15,"color": "#DFDEDE"},
+    {"temperature_k": 193.15,"color": "#E865BD"},
+    {"temperature_k": 183.15,"color": "#820382"},
+    {"temperature_k": 183.15,"color": "#FFFFFF"}
+  ]
+}

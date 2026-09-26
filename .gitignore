@@ -1,0 +1,51 @@
+# ============================================================================
+# 红外灰度增强工具 · Git 忽略规则
+#
+# 这个仓库里真正需要入库的只有：
+#   index.html            工具本体（单文件）
+#   README.md             说明文档
+#   PreSet/*.json         8 份预置色标（内嵌进 index.html 的源数据）
+#   fixtures/             自检用的基准图片与 expected.json
+#   build/*.mjs *.py      自检与预置同步脚本
+# 下面这些是运行/使用过程中产生的东西，都不入库。
+# ============================================================================
+
+# ---- 自检脚本的运行产物 -------------------------------------------------
+# node build/test_html_core.mjs / test_html_browser.mjs / python build/test_verify_exports.py
+# 都会把结果写到 <项目>/build/.test_tmp/：界面截图（每张几百 KB）、导出物、
+# 注入测试的临时页面、以及 headless Chrome 的临时 profile。
+# 随时可以整个删掉，重跑自检就会再生成。
+.test_tmp/
+build/.test_tmp/
+chrome-profile*/
+
+# 核心自检会先把工具脚本抽出来写成一个临时模块再 import，跑完即删
+_tmp_core_test.mjs
+_tmp_*.mjs
+
+# ---- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- 编辑器 / IDE --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- 操作系统杂项 --------------------------------------------------------
+.DS_Store
+._*
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ---- Node ----------------------------------------------------------------
+# 本工具零依赖（自检只用 Node 内置模块），留着是为了以后万一加 devDependencies
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
