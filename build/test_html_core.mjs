@@ -153,7 +153,7 @@ export async function run() {
   check('交换后上方为蓝', m3.colorAtKelvin(273.16).join() === '0,0,255', m3.colorAtKelvin(273.16));
   check('交换后下方为红', m3.colorAtKelvin(273.14).join() === '255,0,0', m3.colorAtKelvin(273.14));
 
-  /* 6b. 最冷端（下限）的硬跳变：下限拉伸必须取「最下方节点」的颜色 */
+  /* 6b. 最冷端（冷端拉伸）的硬跳变：冷端拉伸必须取「最下方节点」的颜色 */
   const lowPair = { name: 'x', created: 1, nodes: [
     makeNode(K_MAX, [0, 0, 0]),
     makeNode(198.15, [160, 160, 160]),
@@ -178,7 +178,7 @@ export async function run() {
   ] };
   sortNodes(nearPair.nodes);
   const mNear = new ColorMapper(nearPair.nodes);
-  check('近似最冷端：下限拉伸用下方节点色',
+  check('近似最冷端：冷端拉伸用下方节点色',
     mNear.colorAtKelvin(K_MIN).join() === '70,70,70', mNear.colorAtKelvin(K_MIN).join());
   const mNearSaved = new ColorMapper(parseScaleRecord(scaleToObject(nearPair)).nodes);
   let sameAll = true, firstDiff = '';
@@ -235,18 +235,66 @@ export async function run() {
   }
   check('非法配置全部被拒绝', allBad, firstBadErr);
 
-  /* 9. 图片温度范围 与 色标范围（色标范围由节点决定，与图片范围无关） */
+  /* 9. 图片温度（黑色端 / 白色端）与 色标范围（色标范围由节点决定，与图片无关） */
   {
     const c2k = c => c + 273.15;
+    setRange(c2k(100), c2k(-100));       // setRange(黑色温度, 白色温度)
+    check('图片温度 p=0 -> 黑色温度 100°C', approx(toDisplay(pToKelvin(0), UNIT_C), 100));
+    check('图片温度 p=255 -> 白色温度 -100°C', approx(toDisplay(pToKelvin(255), UNIT_C), -100));
+    check('程序比较大小得出上限 / 下限：max=100、min=-100', approx(cMax(), 100) && approx(cMin(), -100));
+    check('黑色 / 白色两端的取值', approx(cBlack(), 100) && approx(cWhite(), -100));
+    check('图片温度 亮度顶部 = 0', approx(toDisplay(K_MAX, UNIT_B), 0));
+    check('图片温度 亮度底部 = 255', approx(toDisplay(K_MIN, UNIT_B), 255));
+
+    /* 9a. 浅色代表高温：白色温度高于黑色温度，同样合法（上限 / 下限由程序比较得出） */
+    setRange(c2k(-85), c2k(50));         // 黑色 -85、白色 +50（越白越热）
+    check('反向时同样比较出上限 = 50°C', approx(cMax(), 50) && approx(K_MAX, c2k(50)));
+    check('反向时同样比较出下限 = -85°C', approx(cMin(), -85) && approx(K_MIN, c2k(-85)));
+    check('反向时跨度仍是 135°C', approx(K_SPAN, 135));
+    check('反向时 p=0 仍是黑色温度 -85°C', approx(toDisplay(pToKelvin(0), UNIT_C), -85));
+    check('反向时 p=255 仍是白色温度 +50°C', approx(toDisplay(pToKelvin(255), UNIT_C), 50));
+    check('反向映射在中点线性',
+      approx(toDisplay(pToKelvin(127.5), UNIT_C), -85 + 135 * 127.5 / 255, 1e-9));
+    check('反向时 kelvinToP 也取反（白端 255、黑端 0）',
+      approx(kelvinToP(c2k(50)), 255) && approx(kelvinToP(c2k(-85)), 0));
+    check('反向时亮度仍以灰度为准：黑色端 0、白色端 255',
+      approx(toDisplay(K_BLACK, UNIT_B), 0) && approx(toDisplay(K_WHITE, UNIT_B), 255));
+    check('反向时亮度 0 端仍是黑色端（此时黑色端为冷端）',
+      approx(K_BLACK, K_MIN) && approx(K_WHITE, K_MAX));
+    check('反向时亮度往返一致',
+      approx(fromDisplay(toDisplay(c2k(10), UNIT_B), UNIT_B), c2k(10), 1e-9));
+    {
+      const entRev = legendEntries();
+      check('反向时 Legend 两端仍标注（-85 与 +50）',
+        entRev.some(e => e.isLimit && Math.abs(e.c + 85) < 1e-9)
+        && entRev.some(e => e.isLimit && Math.abs(e.c - 50) < 1e-9),
+        entRev.map(e => e.c).join());
+      check('反向时刻度仍在两温度之间',
+        entRev.every(e => e.c >= -85 && e.c <= 50), entRev.map(e => e.c).join());
+      check('反向时高温端落在色标柱下端（白色端）',
+        approx(kelvinToP(c2k(50)), 255) && approx(kelvinToP(c2k(-85)), 0));
+      const mRev = new ColorMapper([
+        makeNode(c2k(-85), [0, 0, 0], true), makeNode(c2k(50), [255, 255, 255])]);
+      check('反向时着色也跟着反过来（黑端黑、白端白）',
+        mRev.colorAtKelvin(pToKelvin(0)).join() === '0,0,0'
+        && mRev.colorAtKelvin(pToKelvin(255)).join() === '255,255,255');
+    }
+
+    /* 9b. 两个端点温度相同：整幅图一个温度，不能出现 NaN */
+    setRange(c2k(20), c2k(20));
+    check('黑白同温时任何灰度都是同一个温度',
+      approx(pToKelvin(0), c2k(20)) && approx(pToKelvin(255), c2k(20)));
+    check('黑白同温时 kelvinToP / 亮度 不产生 NaN',
+      isFinite(kelvinToP(c2k(20))) && isFinite(toDisplay(c2k(20), UNIT_B))
+      && isFinite(fromDisplay(123, UNIT_B)));
+    check('黑白同温时刻度只剩一条', legendTicksC().length === 1, legendTicksC().join());
+    check('黑白同温时校验仍然通过（不算非法）', validateImageRange(c2k(20), c2k(20)) === null);
+
     setRange(c2k(100), c2k(-100));
-    check('图片范围 p=0 -> 上限 100°C', approx(toDisplay(pToKelvin(0), UNIT_C), 100));
-    check('图片范围 p=255 -> 下限 -100°C', approx(toDisplay(pToKelvin(255), UNIT_C), -100));
-    check('图片范围 亮度顶部 = 0', approx(toDisplay(K_MAX, UNIT_B), 0));
-    check('图片范围 亮度底部 = 255', approx(toDisplay(K_MIN, UNIT_B), 255));
 
     // 新建色标仍然是 50 / -85，不跟随图片范围
     const s4 = defaultScale();
-    check('新建色标不跟随图片温度范围',
+    check('新建色标不跟随图片温度',
       approx(scaleTempRange(s4.nodes).highK, DEF_K_MAX)
       && approx(scaleTempRange(s4.nodes).lowK, DEF_K_MIN));
     const m4 = new ColorMapper(s4.nodes);
@@ -260,14 +308,17 @@ export async function run() {
     check('色标 JSON 不含 range 字段', JSON.parse(t4).range === undefined, t4.slice(0, 80));
     setRange(c2k(63), c2k(-92));
     const back4 = scaleFromObject(JSON.parse(t4));
-    check('打开色标不会改动图片温度范围',
+    check('打开色标不会改动图片温度',
       approx(cMax(), 63) && approx(cMin(), -92), cMax() + ' / ' + cMin());
     check('色标往返一致', scaleToText(back4) === t4);
 
-    // 图片范围校验
-    check('图片范围 上限<=下限 被拒绝', validateImageRange(c2k(-10), c2k(20)) !== null);
-    check('图片范围 超出允许温度被拒绝', validateImageRange(c2k(3000), c2k(0)) !== null);
-    check('图片范围 合法值通过', validateImageRange(c2k(80), c2k(-120)) === null);
+    // 图片温度校验：只要求是数字且在允许区间内，**没有任何大小关系限制**
+    check('浅色代表高温（白色温度更高）被接受', validateImageRange(c2k(-10), c2k(20)) === null);
+    check('两个温度相同被接受', validateImageRange(c2k(20), c2k(20)) === null);
+    check('超出允许温度被拒绝', validateImageRange(c2k(3000), c2k(0)) !== null);
+    check('黑色端低于绝对零度被拒绝', validateImageRange(c2k(0), c2k(-300)) !== null);
+    check('非数字被拒绝', validateImageRange(NaN, c2k(0)) !== null && validateImageRange(c2k(0), Infinity) !== null);
+    check('合法值通过', validateImageRange(c2k(80), c2k(-120)) === null);
 
     // 旧配置里的 range 字段直接忽略
     const oldCfg = { name: '旧配置', range: { upper_k: 373.15, lower_k: 173.15 }, nodes: [
@@ -278,7 +329,7 @@ export async function run() {
     check('旧配置仍可正常载入', true);
     setRange(DEF_K_MAX, DEF_K_MIN);
 
-    // Legend 温度轴 = 图片温度范围（与色标节点无关）
+    // Legend 温度轴 = 图片两端的温度（与色标节点无关）
     setRange(DEF_K_MAX, DEF_K_MIN);
     const ticksDefault = legendTicksC();
     // 默认范围 -85 ~ 50（135°C）：10°C 一档共 14 个整点刻度
@@ -292,11 +343,11 @@ export async function run() {
       ticksDefault.indexOf(-80) >= 0 && ticksDefault.indexOf(50) >= 0);
 
     const entDefault = legendEntries();
-    check('图片上下限都会被标注',
+    check('黑色端与白色端的温度都会被标注',
       entDefault.some(e => e.isLimit && Math.abs(e.c - 50) < 1e-9)
       && entDefault.some(e => e.isLimit && Math.abs(e.c + 85) < 1e-9),
       JSON.stringify(entDefault.map(e => e.c)));
-    check('上限在网格上不重复标注、下限不在网格上额外补一条',
+    check('上限在网格上不重复标注、白色端不在网格上额外补一条',
       entDefault.filter(e => Math.abs(e.c - 50) < 1e-9).length === 1
       && entDefault.filter(e => Math.abs(e.c + 85) < 1e-9).length === 1
       && entDefault.length === ticksDefault.length + 1);
@@ -305,10 +356,10 @@ export async function run() {
     check('亮度模式下两端标注正好是 0 / 255',
       Math.round(toDisplay(DEF_K_MAX, UNIT_B)) === 0 && Math.round(toDisplay(DEF_K_MIN, UNIT_B)) === 255);
 
-    // 上下限不在整点网格上时，额外补两个标注
+    // 两端温度不在整点网格上时，额外补两个标注
     setRange(c2k(63), c2k(-92));
     const entOff = legendEntries();
-    check('不在网格上的上下限会被额外补标',
+    check('不在网格上的两端温度会被额外补标',
       entOff.filter(e => e.isLimit && Math.abs(e.c - 63) < 1e-9).length === 1
       && entOff.filter(e => e.isLimit && Math.abs(e.c + 92) < 1e-9).length === 1
       && entOff.length === legendTicksC().length + 2,
@@ -324,11 +375,11 @@ export async function run() {
     setRange(c2k(63), c2k(-92));
     const ticks63 = legendTicksC();
     const ent63 = legendEntries();
-    check('非整十的图片上下限被额外标注',
+    check('非整十的图片两端温度被额外标注',
       ent63.some(e => e.isLimit && Math.abs(e.c - 63) < 1e-9)
       && ent63.some(e => e.isLimit && Math.abs(e.c + 92) < 1e-9),
       JSON.stringify(ent63));
-    check('非整十上下限不在整点刻度里', ticks63.indexOf(63) < 0 && ticks63.indexOf(-92) < 0);
+    check('非整十的两端温度不在整点刻度里', ticks63.indexOf(63) < 0 && ticks63.indexOf(-92) < 0);
     check('刻度落在图片范围内', ticks63.every(t => t > -92 && t < 63), ticks63.join());
 
     setRange(c2k(60), c2k(-100));
@@ -502,7 +553,7 @@ export async function run() {
       bdm.colorAtKelvin(180.16).join() === '26,26,26', bdm.colorAtKelvin(180.16).join());
     check('IR-BD-ex -80°C 平台为 #878787',
       bdm.colorAtKelvin(193.15).join() === '135,135,135', bdm.colorAtKelvin(193.15).join());
-    check('IR-BD-ex -85°C 平台为 #333333（默认图片下限落在色标内部，不拉伸）',
+    check('IR-BD-ex -85°C 平台为 #333333（默认白色端落在色标内部，不拉伸）',
       bdm.colorAtKelvin(K_MIN).join() === '51,51,51', bdm.colorAtKelvin(K_MIN).join());
     check('IR-BD-ex 冷端三段深灰平台 (#555555 / #333333 / #1A1A1A)',
       bdm.colorAtKelvin(190.15).join() === '85,85,85'
@@ -513,7 +564,7 @@ export async function run() {
     check('IR-BD-ex 203.15K 处上方黑、下方白',
       bdm.colorAtKelvin(203.16).join() === '0,0,0' && bdm.colorAtKelvin(203.14).join() === '255,255,255',
       bdm.colorAtKelvin(203.16).join() + ' / ' + bdm.colorAtKelvin(203.14).join());
-    check('IR-BD-ex 301.15K 处上方为纯黑（图片超上限）',
+    check('IR-BD-ex 301.15K 处上方为纯黑（高于色标最高温节点）',
       bdm.colorAtKelvin(320).join() === '0,0,0', bdm.colorAtKelvin(320).join());
     check('预置保存往返不变',
       scaleToText(presetToScale(bdPreset, 1700000000000))
@@ -706,7 +757,7 @@ export async function run() {
       renderMarkdown(FENCE + 'json\\n{"a": 1}\\n' + FENCE).html.indexOf('<pre><code>{"a": 1}</code></pre>') >= 0,
       renderMarkdown(FENCE + 'json\\n{"a": 1}\\n' + FENCE).html);
     check('说明书覆盖了关键功能点',
-      ['温度范围', '保留节点', '标准 BD', '硬跳变', '我的色标', '管理色标', '批量导出', 'JSON', '常见问题']
+      ['白色温度', '保留节点', '标准 BD', '硬跳变', '我的色标', '管理色标', '批量导出', 'JSON', '常见问题']
         .every(k => mdSrc.indexOf(k) >= 0));
     check('说明书足够详尽（> 6000 字）', mdSrc.length > 6000, String(mdSrc.length));
   }

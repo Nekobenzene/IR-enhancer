@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light">
-<meta name="description" content="离线单文件工具：导入红外灰度 PNG / JPG，按自定义温度上下限做连续色标增强，实时预览并单张或批量导出。">
+<meta name="description" content="离线单文件工具：导入红外灰度 PNG / JPG，按自定义的黑白两端温度做连续色标增强，实时预览并单张或批量导出。">
 <title>红外灰度色标增强工具</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f6cbd'/%3E%3Crect x='6' y='6' width='7' height='20' rx='2' fill='%23ffffff'/%3E%3Crect x='18' y='6' width='8' height='9' rx='2' fill='%23ffffff' opacity='.75'/%3E%3Crect x='18' y='17' width='8' height='9' rx='2' fill='%23ffffff' opacity='.4'/%3E%3C/svg%3E">
 <style>
@@ -169,7 +169,7 @@
     display: flex; align-items: center; gap: 5px; color: var(--text-2); cursor: pointer;
   }
   .pane-head label:hover { color: var(--text-1); }
-  /* 图片温度范围：放在预览标题与「重置视图」之间 */
+  /* 图片温度（黑色端 / 白色端）：放在预览标题与「重置视图」之间 */
   .range-inline {
     display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
     color: var(--text-2); white-space: nowrap;
@@ -207,7 +207,7 @@
   /* Fit（整图可见）时单指纵向滑动让给页面滚动；放大之后才由画布接管拖动平移 */
   #previewCanvas.preview-scrollable { touch-action: pan-y; }
 
-  /* 温度上下限以下：左边更长的色标柱，右边节点卡片，两列并排 */
+  /* 温度输入以下：左边更长的色标柱，右边节点卡片，两列并排 */
   #scaleBody {
     flex: 1 1 auto; min-height: 0;
     display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px;
@@ -234,7 +234,7 @@
   }
   input:disabled, select:disabled { background: var(--n-2); color: var(--text-3); }
   input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0 2px 0 0; }
-  #scaleName, #imageRangeUpper, #imageRangeLower, .hex-input, .rgb-input {
+  #scaleName, #imageRangeBlack, #imageRangeWhite, .hex-input, .rgb-input {
     font-variant-numeric: tabular-nums;
   }
 
@@ -639,7 +639,7 @@
 
   @media (max-width: 560px) {
     body { font-size: 14px; }
-    /* 预览标题行：图片信息独占一行，温度范围与「重置视图」排下一行 */
+    /* 预览标题行：图片信息独占一行，温度输入与「重置视图」排下一行 */
     .pane-head { flex-wrap: wrap; row-gap: 6px; }
     #previewInfo { flex: 1 1 100%; }
     .range-inline { flex: 1 1 auto; gap: 4px; }
@@ -691,11 +691,11 @@
       <div class="pane-head">
         <div id="previewInfo" class="muted ellipsis">请添加 PNG / JPG 图片</div>
         <div class="range-inline">
-          <span id="imageRangeLabel">温度范围（°C）</span>
-          <label for="imageRangeUpper">上限</label>
-          <input type="text" id="imageRangeUpper" title="图片温度上限（对应灰度值 0）">
-          <label for="imageRangeLower">下限</label>
-          <input type="text" id="imageRangeLower" title="图片温度下限（对应灰度值 255）">
+          <span id="imageRangeLabel">温度（°C）</span>
+          <label for="imageRangeBlack">黑色温度</label>
+          <input type="text" id="imageRangeBlack" title="灰度值 0（纯黑）对应的温度">
+          <label for="imageRangeWhite">白色温度</label>
+          <input type="text" id="imageRangeWhite" title="灰度值 255（纯白）对应的温度">
         </div>
         <button id="btnResetView" title="只重置缩放与平移，不改变色标与图片">重置视图</button>
       </div>
@@ -939,37 +939,54 @@
  * 第 1 部分：核心常量与温度 / 单位换算（与界面无关）
  * ========================================================================= */
 
-const T_C_DEFAULT_MAX = 50.0;      // 图片默认上限（p = 0）
-const T_C_DEFAULT_MIN = -85.0;     // 图片默认下限（p = 255）
+const T_C_DEFAULT_BLACK = 50.0;    // 默认：灰度 0（纯黑）对应的温度
+const T_C_DEFAULT_WHITE = -85.0;   // 默认：灰度 255（纯白）对应的温度
 const KELVIN_OFFSET = 273.15;
-const DEF_K_MAX = T_C_DEFAULT_MAX + KELVIN_OFFSET;   // 323.15 K
-const DEF_K_MIN = T_C_DEFAULT_MIN + KELVIN_OFFSET;   // 188.15 K
+const DEF_K_BLACK = T_C_DEFAULT_BLACK + KELVIN_OFFSET;   // 323.15 K
+const DEF_K_WHITE = T_C_DEFAULT_WHITE + KELVIN_OFFSET;   // 188.15 K
+// 默认的上限 / 下限：由程序把黑色温度与白色温度**比较大小**得出（不要求用户按大小填）
+const DEF_K_MAX = Math.max(DEF_K_BLACK, DEF_K_WHITE);
+const DEF_K_MIN = Math.min(DEF_K_BLACK, DEF_K_WHITE);
 
-// 图片温度范围：灰度值 -> 物理温度的唯一依据，与色标无关
+// 图片温度：灰度值 -> 物理温度的唯一依据，与色标无关
 // （切换色标不会改变像素代表多少度）
-let K_MAX = DEF_K_MAX;
-let K_MIN = DEF_K_MIN;
+// 只有**两个端点温度**：p=0 是黑色温度，p=255 是白色温度；谁高谁低都行，
+// 也就是「浅色代表高温」同样合法 —— 上限 / 下限由 setRange 比较大小后定出来。
+let K_BLACK = DEF_K_BLACK;
+let K_WHITE = DEF_K_WHITE;
+let K_MAX = DEF_K_MAX;             // 上限 = max(黑色温度, 白色温度)
+let K_MIN = DEF_K_MIN;             // 下限 = min(黑色温度, 白色温度)
 let K_SPAN = K_MAX - K_MIN;
 
 // 节点允许的温度边界（绝对零度以上，避免误输入天文数字）
 const NODE_K_MIN = 1.0;
 const NODE_K_MAX = 2000.0;
 
-function setRange(upperK, lowerK) {
-  K_MAX = Number(upperK);
-  K_MIN = Number(lowerK);
+/** 设置图片温度：黑色端 / 白色端。上限与下限由程序比较大小后定出来。 */
+function setRange(blackK, whiteK) {
+  K_BLACK = Number(blackK);
+  K_WHITE = Number(whiteK);
+  K_MAX = Math.max(K_BLACK, K_WHITE);
+  K_MIN = Math.min(K_BLACK, K_WHITE);
   K_SPAN = K_MAX - K_MIN;
 }
+const cBlack = () => K_BLACK - KELVIN_OFFSET;
+const cWhite = () => K_WHITE - KELVIN_OFFSET;
 const cMax = () => K_MAX - KELVIN_OFFSET;
 const cMin = () => K_MIN - KELVIN_OFFSET;
 
-/** 图片温度范围校验 */
-function validateImageRange(upperK, lowerK) {
-  if (!isFinite(upperK) || !isFinite(lowerK)) return '上限与下限都必须是数字。';
-  if (upperK - lowerK < 1e-6) return '上限必须大于下限。';
-  if (lowerK < NODE_K_MIN || upperK > NODE_K_MAX) {
-    return '温度范围必须在 ' + (NODE_K_MIN - KELVIN_OFFSET).toFixed(2) + '°C ~ '
-      + (NODE_K_MAX - KELVIN_OFFSET).toFixed(2) + '°C 之间。';
+/**
+ * 图片温度校验：两个值都必须是数字，且都落在允许范围内。
+ * **没有大小关系要求**：白色温度高于黑色温度（浅色代表高温）同样合法；
+ * 两个端点温度相同时整幅图就是同一个温度，也允许。
+ */
+function validateImageRange(blackK, whiteK) {
+  if (!isFinite(blackK) || !isFinite(whiteK)) return '黑色温度与白色温度都必须是数字。';
+  for (const v of [blackK, whiteK]) {
+    if (v < NODE_K_MIN || v > NODE_K_MAX) {
+      return '两个温度都必须落在 ' + (NODE_K_MIN - KELVIN_OFFSET).toFixed(2) + '°C ~ '
+        + (NODE_K_MAX - KELVIN_OFFSET).toFixed(2) + '°C 之间。';
+    }
   }
   return null;
 }
@@ -979,13 +996,13 @@ const UNITS = [UNIT_C, UNIT_F, UNIT_K, UNIT_B];
 const P_MAX = 255;
 
 const DEFAULT_SCALE_NAME = '未命名色标';
-const DEFAULT_HIGH_RGB = [0, 0, 0];          // 上限温度 -> 黑色
-const DEFAULT_LOW_RGB = [255, 255, 255];     // 下限温度 -> 白色
+const DEFAULT_HIGH_RGB = [0, 0, 0];          // 默认色标最高温节点 -> 黑色
+const DEFAULT_LOW_RGB = [255, 255, 255];     // 默认色标最低温节点 -> 白色
 
 /**
- * Legend 刻度（物理 °C 位置）。温度轴始终等于**图片温度范围**，
+ * Legend 刻度（物理 °C 位置）。温度轴始终等于**图片温度**，
  * 默认每 10°C 一个刻度；范围很窄/很宽时自动换挡，刻度数量保持在 3 ~ 14 之间。
- * 图片上下限若正好落在整点上也会包含在内。
+ * 图片两端的温度（黑色温度 / 白色温度，谁高都行）若正好落在整点上也会包含在内。
  */
 function legendTicksC() {
   const lo = cMin(), hi = cMax();
@@ -1010,8 +1027,8 @@ function legendTicksC() {
 }
 
 /**
- * Legend 上要标注的项：整点刻度 + 图片温度上下限。
- * 上下限不是整十数（没落在刻度网格上）时会额外补上，保证两端始终标得出来。
+ * Legend 上要标注的项：整点刻度 + 图片两端的温度（黑色端 / 白色端）。
+ * 两端温度没落在刻度网格上时会额外补上，保证黑色和白色两端的温度始终标得出来。
  */
 function legendEntries() {
   const lo = cMin(), hi = cMax();
@@ -1023,7 +1040,7 @@ function legendEntries() {
   }));
   if (!onGrid(hi)) entries.push({ c: hi, isLimit: true });
   if (!onGrid(lo)) entries.push({ c: lo, isLimit: true });
-  entries.sort((a, b) => b.c - a.c);          // 高温在上
+  entries.sort((a, b) => b.c - a.c);          // 高温在前（画的时候按各自位置定位）
   return entries;
 }
 
@@ -1043,17 +1060,26 @@ function roundHalfEven(value, digits = KEY_DIGITS) {
   return r / m;
 }
 
-/** 灰度值 0..255 -> Kelvin。p=0 -> 50°C，p=255 -> -85°C。 */
-function pToKelvin(p) { return K_MAX + (K_MIN - K_MAX) * (p / P_MAX); }
-/** Kelvin -> 灰度位置 0..255（连续浮点）。 */
-function kelvinToP(k) { return (K_MAX - k) * (P_MAX / K_SPAN); }
+/**
+ * 灰度值 0..255 -> Kelvin：p=0 是黑色温度，p=255 是白色温度（两者谁高都行）。
+ * 两个端点温度相同时整幅图就是那一个温度。
+ */
+function pToKelvin(p) {
+  if (K_SPAN < 1e-9) return K_BLACK;
+  return K_BLACK + (K_WHITE - K_BLACK) * (p / P_MAX);
+}
+/** Kelvin -> 灰度位置 0..255（连续浮点）。端点温度相同时一律算作 0（黑色端）。 */
+function kelvinToP(k) {
+  if (K_SPAN < 1e-9) return 0;
+  return (k - K_BLACK) * (P_MAX / (K_WHITE - K_BLACK));
+}
 
 function toDisplay(kelvin, unit) {
   switch (unit) {
     case UNIT_C: return kelvin - KELVIN_OFFSET;
     case UNIT_F: return (kelvin - KELVIN_OFFSET) * 9 / 5 + 32;
     case UNIT_K: return kelvin;
-    case UNIT_B: return (K_MAX - kelvin) * (P_MAX / K_SPAN);   // 顶部 0，底部 255
+    case UNIT_B: return kelvinToP(kelvin);            // 黑色端 0，白色端 255
     default: throw new Error('未知单位：' + unit);
   }
 }
@@ -1062,7 +1088,7 @@ function fromDisplay(value, unit) {
     case UNIT_C: return value + KELVIN_OFFSET;
     case UNIT_F: return (value - 32) * 5 / 9 + KELVIN_OFFSET;
     case UNIT_K: return value;
-    case UNIT_B: return K_MAX - value * (K_SPAN / P_MAX);
+    case UNIT_B: return pToKelvin(value);             // 0 -> 黑色端，255 -> 白色端
     default: throw new Error('未知单位：' + unit);
   }
 }
@@ -1196,7 +1222,7 @@ class ColorMapper {
     // 与 Python searchsorted(side='right') 等价：m = k[j] >= t 的个数
     let m = 0;
     while (m < n && k[m] >= t) m++;
-    // t 落在最冷节点上或更冷：一律取**最下方节点**的颜色（下限拉伸）。
+    // t 落在最冷节点上或更冷：一律取**最下方节点**的颜色（冷端拉伸）。
     // 若最冷的两个节点位置相同（硬跳变），原先会退化成取上面那个节点的颜色，
     // 与竖向 legend / 图片着色不一致。
     if (m >= n) return c[n - 1].slice();
@@ -2298,8 +2324,8 @@ function drawLegend() {
 
   const barW = Math.round(LEGEND_BAR_CSS * dpr);
   const mapper = state.mapper;
-  // 温度轴 = 图片温度范围：色标不足的部分把两端节点色拉伸补齐，
-  // 超出图片范围的部分直接截断（不显示）。
+  // 温度轴 = 图片两端的温度：柱子自上而下就是灰度 0 → 255（黑色端 → 白色端），
+  // 色标不足的部分把两端节点色拉伸补齐，超出图片温度的部分直接截断（不显示）。
   if (mapper && H > 0) {
     const tmp = makeCanvas(1, H);
     const tctx = tmp.getContext('2d');
@@ -2338,7 +2364,7 @@ function drawLegend() {
   };
 
   const entries = legendEntries();
-  // 标签间距不足时按整数倍抽稀，只画刻度线不画文字；图片上下限永远标注
+  // 标签间距不足时按整数倍抽稀，只画刻度线不画文字；黑色端 / 白色端的温度永远标注
   const spacing = H / Math.max(1, entries.length);
   const stride = Math.max(1, Math.ceil((15 * dpr) / spacing));
 
@@ -2609,7 +2635,7 @@ function setTriggerEnabled(id, enabled) {
 
 function setBusy(busy) {
   state.busy = busy;
-  ['scaleName', 'unitSelect', 'imageRangeUpper', 'imageRangeLower', 'nodeSelectMode', 'btnAddNode', 'btnNodeAll', 'btnNodeNone',
+  ['scaleName', 'unitSelect', 'imageRangeBlack', 'imageRangeWhite', 'nodeSelectMode', 'btnAddNode', 'btnNodeAll', 'btnNodeNone',
    'btnNodeDelete', 'imgSelectMode', 'btnImgAll', 'btnImgNone', 'btnImgDelete',
    'btnAddImages', 'btnResetView', 'btnExportMenu', 'btnOpenScale', 'btnSaveScale',
    'btnManageScales'].forEach(
@@ -2793,40 +2819,45 @@ async function deleteSelectedImages() {
 }
 
 /* =========================================================================
- * 第 16 部分：图片温度范围 与 色标节点增删改
+ * 第 16 部分：图片温度（黑色端 / 白色端）与 色标节点增删改
  *
- * 图片温度范围决定「灰度值 -> 多少度」，与色标无关，切换色标不会改变它。
+ * 黑色温度 = 灰度 0 的温度，白色温度 = 灰度 255 的温度；两者谁高都行
+ * （浅色代表高温也支持）。上限 / 下限由程序比较大小后定出来，与色标无关，
+ * 切换色标不会改变它。
  * ========================================================================= */
 
-/** 刷新图片温度范围输入框（输入框内只填数字，单位由标签给出） */
+/** 刷新图片温度输入框（黑色端 / 白色端；只填数字，单位由标签给出） */
 function updateRangeInputs() {
-  $('imageRangeLabel').textContent = '温度范围（' + state.unit + '）';
-  const up = $('imageRangeUpper'), lo = $('imageRangeLower');
-  if (document.activeElement !== up) up.value = formatDisplay(K_MAX, state.unit);
-  if (document.activeElement !== lo) lo.value = formatDisplay(K_MIN, state.unit);
+  $('imageRangeLabel').textContent = '温度（' + state.unit + '）';
+  const bl = $('imageRangeBlack'), wh = $('imageRangeWhite');
+  if (document.activeElement !== bl) bl.value = formatDisplay(K_BLACK, state.unit);
+  if (document.activeElement !== wh) wh.value = formatDisplay(K_WHITE, state.unit);
 }
 
-/** 提交图片温度范围：校验失败则恢复原值并提示原因 */
+/** 提交图片温度：校验失败则恢复原值并提示原因 */
 function commitRange() {
   if (state.busy) { updateRangeInputs(); return; }
-  const upV = parseFloatCN($('imageRangeUpper').value);
-  const loV = parseFloatCN($('imageRangeLower').value);
-  if (upV === null || loV === null) {
-    showError('温度范围无效', '上限与下限都必须是数字（按当前单位 ' + state.unit + ' 填写）。');
+  const blV = parseFloatCN($('imageRangeBlack').value);
+  const whV = parseFloatCN($('imageRangeWhite').value);
+  if (blV === null || whV === null) {
+    showError('温度无效', '黑色温度与白色温度都必须是数字（按当前单位 ' + state.unit + ' 填写）。');
     updateRangeInputs();
     return;
   }
-  const upperK = fromDisplay(upV, state.unit);
-  const lowerK = fromDisplay(loV, state.unit);
-  const err = validateImageRange(upperK, lowerK);
+  const blackK = fromDisplay(blV, state.unit);
+  const whiteK = fromDisplay(whV, state.unit);
+  const err = validateImageRange(blackK, whiteK);
   if (err) {
-    showError('温度范围无效', err);
+    showError('温度无效', err);
     updateRangeInputs();
     return;
   }
-  setRange(upperK, lowerK);          // 只影响灰度->温度，不动色标节点
-  log('图片温度范围已改为：' + formatDisplay(K_MAX, state.unit) + unitSuffix(state.unit)
-    + '（上限） ~ ' + formatDisplay(K_MIN, state.unit) + unitSuffix(state.unit) + '（下限）');
+  setRange(blackK, whiteK);          // 只影响灰度->温度，不动色标节点
+  // 上限 / 下限是程序比较两个温度后得出的，日志里一并写出来便于核对
+  log('图片温度已改为：黑色 ' + formatDisplay(K_BLACK, state.unit) + unitSuffix(state.unit)
+    + ' / 白色 ' + formatDisplay(K_WHITE, state.unit) + unitSuffix(state.unit)
+    + '（上限 ' + formatDisplay(K_MAX, state.unit) + unitSuffix(state.unit)
+    + '，下限 ' + formatDisplay(K_MIN, state.unit) + unitSuffix(state.unit) + '）');
   refreshAll();
 }
 
@@ -2965,8 +2996,9 @@ function openNodeDialog(opts) {
  * ========================================================================= */
 
 /**
- * 横向 legend：左低温、右高温，不画细刻度，只在左右两端标温度上下限。
- * 温度轴同样取**图片温度范围**，因此列表里所有色标共用同一根温度轴，便于横向比较。
+ * 横向 legend：左低温、右高温，不画细刻度，只在左右两端标出两端的温度。
+ * 温度轴同样取**图片两端的温度**（由程序比较大小得出上限 / 下限），
+ * 因此列表里所有色标共用同一根温度轴，便于横向比较。
  */
 function drawHScaleLegend(canvas, record) {
   const dpr = fitCanvas(canvas);
@@ -2976,7 +3008,7 @@ function drawHScaleLegend(canvas, record) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, W, H);
 
-  const upperK = K_MAX, lowerK = K_MIN;      // 图片温度范围
+  const upperK = K_MAX, lowerK = K_MIN;      // 图片温度的上限 / 下限（程序比较得出）
   const leftText = String(Math.round(toDisplay(lowerK, state.unit)));
   const rightText = String(Math.round(toDisplay(upperK, state.unit)));
   ctx.font = Math.max(9, Math.round(11 * dpr)) + 'px ' + cssVar('--font-num', 'Consolas, monospace');
@@ -2989,7 +3021,7 @@ function drawHScaleLegend(canvas, record) {
   const barH = Math.round(12 * dpr);
   const barY = Math.round(H / 2 - barH / 2);
 
-  // 左端 = 图片下限，右端 = 图片上限；色标不足处由 mapper 自动拉伸两端节点色
+  // 左端 = 温度下限，右端 = 温度上限；色标不足处由 mapper 自动拉伸两端节点色
   const mapper = new ColorMapper(record.nodes);
   const tmp = makeCanvas(barW, 1);
   const tctx = tmp.getContext('2d');
@@ -4203,8 +4235,8 @@ function bindUI() {
     log('显示单位切换为：' + state.unit);
   });
 
-  // 温度上下限（输入框内只填数字，单位取当前全局单位）
-  ['imageRangeUpper', 'imageRangeLower'].forEach(id => {
+  // 图片温度：黑色端 / 白色端（只填数字，单位取当前全局单位；不要求谁大谁小）
+  ['imageRangeBlack', 'imageRangeWhite'].forEach(id => {
     const el = $(id);
     el.addEventListener('blur', commitRange);
     el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } });
@@ -4452,14 +4484,16 @@ else init();
 
 把红外灰度图（**PNG / JPG**）按「灰度值 → 物理温度 → 颜色」的固定映射重新着色成彩色图，并导出为**与源文件同格式、同分辨率**的图片。
 
-- **灰度 → 温度**：`T = 上限 - (上限 - 下限) × p / 255`，`p` 是 0~255 的灰度值，上下限在预览区顶部设定。
+- **灰度 → 温度**：`T = 黑色温度 + (白色温度 - 黑色温度) × p / 255`，`p` 是 0~255 的灰度值（0 = 纯黑、255 = 纯白），**黑色温度 / 白色温度**在预览区顶部设定。
 - **温度 → 颜色**：由色标决定。色标是一串「温度 + 颜色」节点，节点之间 RGB 三通道分别线性插值；两个节点温度相同时形成硬跳变。
-- **温度范围属于图片，不属于色标**：切换色标只换配色方案，不改变「某个灰度代表多少度」。
+- **温度属于图片，不属于色标**：切换色标只换配色方案，不改变「某个灰度代表多少度」。
+- **上限 / 下限由程序自己比较得出**：填的两个温度谁高谁低都行，所以**浅色代表高温**（白色温度更高）也支持；
+  上限 = 两者中较大的、下限 = 较小的，程序用它们来做刻度、亮度换算与范围判断。
 
 ### 1.2 快速开始（三步）
 
 1. 点右上角 **「添加图片」**，选一张或多张 PNG / JPG（可多选；不支持拖拽）。
-2. 看一眼预览区顶部的 **温度范围（°C）** 上下限（默认 50 / -85），需要就改；再点 **打开色标 → 预设** 挑一套现成色标（配置文件里现成的 9 套，含标准 BD 色阶；想从零搭就选「空白」）。
+2. 看一眼预览区顶部的 **温度（°C）** 里「黑色温度 / 白色温度」（默认 50 / -85），需要就改；再点 **打开色标 → 预设** 挑一套现成色标（配置文件里现成的 9 套，含标准 BD 色阶；想从零搭就选「空白」）。
 3. 点 **导出图片 → 单张导出**（导出当前预览的那张）或 **批量导出**（先勾选要导出的图片）。
 
 ### 1.3 界面总览
@@ -4467,7 +4501,7 @@ else init();
 | 区域 | 内容 |
 | --- | --- |
 | 顶部菜单栏 | 左：帮助（使用说明 / 关于）；右：退出 |
-| 左侧大区 | 图片预览；标题栏含「温度范围（°C）上限 / 下限」两个输入框和「重置视图」按钮 |
+| 左侧大区 | 图片预览；标题栏含「黑色温度 / 白色温度」两个输入框和「重置视图」按钮 |
 | 中间色标列 | 上方：三组下拉按钮 + 色标名称 + 单位 + 只读的色标范围；下方左「细色标柱 + 温度刻度」、右「色标节点卡片列表」 |
 | 右侧图片列表 | 缩略图 + 显示名，当前预览行浅蓝底；顶部「选择」开关与「导出图片」，底部「添加图片」与「删除选中」 |
 | 底部运行日志 | 每步操作都带时间戳，「清空日志」可清屏 |
@@ -4484,12 +4518,17 @@ else init();
 | 保存色标 | 中间列最上方 | 保存 / 另存为 |
 | 导出图片 | 图片列表上方 | 单张导出（当前预览）/ 批量导出（已勾选的图片） |
 
-## 2. 温度范围（属于图片）
+## 2. 图片温度：黑色温度 / 白色温度
 
-- 输入框在**预览区标题与「重置视图」之间**，默认 **上限 50°C / 下限 -85°C**。
-- 上限对应灰度值 0（最黑），下限对应灰度值 255（最白）。
-- 修改后立即重新给预览上色，**不会改动任何色标节点**。
-- 校验规则：必须是数字、上限必须大于下限、范围必须落在 **-272.15°C ~ 1726.85°C**（内部 1 K ~ 2000 K）之间；非法时弹提示并**恢复原值**。
+- 两个输入框在**预览区标题与「重置视图」之间**，默认 **黑色温度 50°C / 白色温度 -85°C**。
+- **黑色温度** = 灰度值 0（纯黑）对应多少度；**白色温度** = 灰度值 255（纯白）对应多少度。
+- **不要求谁大谁小**：白色温度高于黑色温度也完全合法，这时就是「浅色代表高温」。
+  程序内部会**比较大小**得出上限（较大的那个）与下限（较小的那个），
+  刻度、亮度换算、范围判断全都用这两个值，不需要你按顺序填。
+- 两个温度填成一样也可以（整幅图就是同一个温度，全图一个颜色）。
+- 修改后立即重新给预览上色，**不会改动任何色标节点**；运行日志里会写出这次换算出的上限 / 下限。
+- 校验规则：两个都必须是数字、都必须落在 **-272.15°C ~ 1726.85°C**（内部 1 K ~ 2000 K）之间；
+  非法时弹提示并**恢复原值**（除了数值范围，没有任何大小关系限制）。
 - 单位切换（°C / °F / K / 亮度）时这两个框会自动换算显示，但温度本身不变。
 
 ## 3. 色标与节点
@@ -4520,17 +4559,20 @@ else init();
 - **删除节点**：打开节点列表顶部的「选择」开关，勾选后点「删除选中」；一个都没勾会提示「请选择节点」。
 - 节点温度允许范围 **-272.15°C ~ 1726.85°C**（1 K ~ 2000 K），同一位置超过 2 个节点会被拒绝。
 
-### 3.5 色标与图片范围不一致时（拉伸 / 截断）
+### 3.5 色标与图片温度不一致时（拉伸 / 截断）
 
-所有 legend 的温度轴都等于**图片温度范围**，所以：
+所有 legend 的温度轴都等于**图片两端的温度**（黑色温度 ~ 白色温度），所以：
 
 | 情况 | legend 表现 |
 | --- | --- |
-| 色标比图片范围**窄**（例如色标 -80~28，图片 -85~50） | 两端节点颜色被**拉伸**到图片上下限 |
-| 色标比图片范围**宽**（例如色标 -200~200） | 只显示图片范围内那一段，超出部分**截断**不显示 |
+| 色标比图片温度区间**窄**（例如色标 -80~28，图片 -85~50） | 两端节点颜色被**拉伸**到图片两端的温度 |
+| 色标比图片温度区间**宽**（例如色标 -200~200） | 只显示图片温度区间那一段，超出部分**截断**不显示 |
 
 - 图片温度**高于色标最高温节点** → 一律取最高温节点的颜色；**低于最低温节点** → 取最低温节点的颜色。
-- 这套规则同样作用于「我的色标 / 管理色标」弹窗里的横向 legend，因此列表里所有色标可以直接横向对比。
+- 竖向色标柱**顶端永远是黑色端、底端永远是白色端**，柱子上的刻度就是各灰度对应的温度；
+  所以「浅色代表高温」时，顶端的数字比底端小。
+- 这套规则同样作用于「我的色标 / 管理色标」弹窗里的横向 legend（横向那根是**温度轴**：左低右高），
+  因此列表里所有色标可以直接横向对比。
 
 ## 4. 预设色标
 
@@ -4596,7 +4638,7 @@ else init();
 ### 5.3 我的色标
 
 - 打开色标 → 我的色标：列出本地库里的色标，每条显示**横向 legend + 名称 + 创建时间**（`创建于YYYYMMDD HH:mm:SS`）。
-- 横向 legend 以**当前图片温度范围**为温度轴，方便横向比较不同色标。
+- 横向 legend 以**当前图片两端的温度**为温度轴（左低右高），方便横向比较不同色标。
 - 点一条选中，按 **确定** 载入（未选中时「确定」是禁用的）；底部左「取消」右「确定」。
 - 底部的 **「导出到剪贴板」** 在**单选一条之后**才可用（多选状态下不可用）：点一下就把这条色标的 JSON 复制走，
   内容与「另存为」导出的文件完全一样，可以直接粘到聊天窗口、记事本，或用下面的「输入色标」再贴回来。
@@ -4656,7 +4698,7 @@ else init();
 | `nodes[].color` | **必填** | 颜色，`#RRGGBB`（也认 `#RGB`） |
 | `nodes[].pinned` | 可选 | `true` 表示保留节点（不可删除） |
 
-校验规则：顶层必须是对象；同一位置（0.01 K 精度）最多 2 个节点；**温度范围不在色标里**（旧文件里遗留的 `range` 字段会被直接忽略）。任何一条不满足都会给出具体原因，并且**当前色标保持不变**。
+校验规则：顶层必须是对象；同一位置（0.01 K 精度）最多 2 个节点；**色标里没有温度字段**（旧文件里遗留的 `range` 字段会被直接忽略）。任何一条不满足都会给出具体原因，并且**当前色标保持不变**。
 
 ## 7. 图片管理
 
@@ -4692,7 +4734,8 @@ else init();
 
 - 单位下拉框只影响**显示与输入**，内部一律以 Kelvin 存储，导出不受影响。
 - `°C` / `°F` / `K`：常规温标换算。
-- `亮度`：把图片温度范围线性映射成 0（上限）~ 255（下限），刻度每 10°C 一个整数，适合和灰度原图直接对照。
+- `亮度`：就是灰度值本身 —— **黑色端 = 0、白色端 = 255**，刻度每 10°C 一个整数，适合和灰度原图直接对照。
+  （黑色温度更高时，亮度 0 一边就是高温。）
 - 温度与节点位置保存精度统一为 **0.01 K**，使用银行家舍入（round-half-even），所以 `200.125 → 200.12`、`200.135 → 200.14`。
 
 ## 11. 实现细节
@@ -4706,8 +4749,10 @@ else init();
 
 ## 12. 常见问题
 
-- **导出后颜色和预览不一样？** 检查是否误改了「温度范围」，或导出的是另一张图片（批量导出只处理勾选的那些）。
-- **为什么改色标温度没反应？** 色标范围比图片范围宽时，图片那段只是色标的一小部分；把色标范围调到覆盖图片范围更有意义。
+- **导出后颜色和预览不一样？** 检查是否误改了「黑色温度 / 白色温度」，或导出的是另一张图片（批量导出只处理勾选的那些）。
+- **想让浅色代表高温怎么办？** 把「白色温度」填得比「黑色温度」高就行（例如黑色 -85、白色 50）：
+  两个框没有大小关系要求，上限 / 下限由程序自己比较得出，色标柱与刻度会跟着反过来（顶端数字变小、底端变大）。
+- **为什么改色标温度没反应？** 色标一端超出图片温度区间时，图片只用到色标的一小部分（超出部分会被截断）；把色标那端调进图片温度区间内更有意义。
 - **为什么删除按钮是灰的？** 「删除」在没勾选（或多选下没勾任何一条）时是禁用的；保留节点永远不能删。
 - **同一温度放了两个节点，色带方向反了？** 点两个卡片之间的 **⇅** 按钮交换顺序即可。
 - **从「预设」导入的色标，时间戳是哪来的？** 预设文件里没有 created，所以按**导入那一刻**生成；每导入一次都是新的一条，可以各自命名后分别保存。

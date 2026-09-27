@@ -1300,17 +1300,26 @@ window.__runBrowserTest = async function () {
       await doNewScale();
     }
 
-    /* ---- 图片温度范围（在预览标题与「重置视图」之间） ---- */
+    /* ---- 图片温度：黑色端 / 白色端（在预览标题与「重置视图」之间） ---- */
     {
       const c2k = c => c + 273.15;
       const msgText = () => $('msgTitle').textContent + '：' + $('msgText').textContent;
       const closeMsg = () => { if ($('msgDialog').open) $('msgOk').click(); };
 
-      check('预览区有图片温度范围输入框', !!$('imageRangeUpper') && !!$('imageRangeLower'));
-      check('温度范围位于标题与「重置视图」之间',
-        ($('previewInfo').compareDocumentPosition($('imageRangeUpper')) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-        && ($('imageRangeUpper').compareDocumentPosition($('btnResetView')) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
-      check('色标列不再有温度范围输入框',
+      check('预览区有黑色温度 / 白色温度两个输入框',
+        !!$('imageRangeBlack') && !!$('imageRangeWhite'));
+      check('两个输入框的标签就是「黑色温度」「白色温度」',
+        document.querySelector('label[for="imageRangeBlack"]').textContent === '黑色温度'
+        && document.querySelector('label[for="imageRangeWhite"]').textContent === '白色温度',
+        document.querySelector('label[for="imageRangeBlack"]').textContent + ' / '
+          + document.querySelector('label[for="imageRangeWhite"]').textContent);
+      check('温度输入位于标题与「重置视图」之间',
+        ($('previewInfo').compareDocumentPosition($('imageRangeBlack')) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        && ($('imageRangeBlack').compareDocumentPosition($('btnResetView')) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+      check('界面上不再有「上限 / 下限」的表述',
+        document.querySelector('#previewPane').textContent.indexOf('上限') < 0
+        && document.querySelector('#previewPane').textContent.indexOf('下限') < 0);
+      check('色标列不再有温度输入框',
         $('scalePane').querySelector('#rangeUpper') === null
         && $('scalePane').querySelector('#rangeLower') === null);
       check('色标列改为显示「由节点决定」的范围',
@@ -1318,17 +1327,23 @@ window.__runBrowserTest = async function () {
 
       const nodesBefore = state.scale.nodes.map(n => roundHalfEven(n.kelvin)).join();
 
-      $('imageRangeUpper').value = '60'; $('imageRangeLower').value = '-100';
+      $('imageRangeBlack').value = '60'; $('imageRangeWhite').value = '-100';
       commitRange();
-      check('图片温度范围可改为 60 / -100',
+      check('图片温度可改为黑色 60 / 白色 -100',
+        Math.abs(toDisplay(K_BLACK, UNIT_C) - 60) < 1e-9 && Math.abs(toDisplay(K_WHITE, UNIT_C) + 100) < 1e-9,
+        toDisplay(K_BLACK, UNIT_C) + ' / ' + toDisplay(K_WHITE, UNIT_C));
+      check('上限 / 下限由程序比较大小得出',
         Math.abs(toDisplay(K_MAX, UNIT_C) - 60) < 1e-9 && Math.abs(toDisplay(K_MIN, UNIT_C) + 100) < 1e-9,
         toDisplay(K_MAX, UNIT_C) + ' / ' + toDisplay(K_MIN, UNIT_C));
+      check('日志里写出这次换算出的上限 / 下限',
+        $('logView').textContent.indexOf('上限 60.00') >= 0
+        && $('logView').textContent.indexOf('下限 -100.00') >= 0);
       check('输入框只显示数字（无单位）',
-        $('imageRangeUpper').value === '60.00' && $('imageRangeLower').value === '-100.00',
-        $('imageRangeUpper').value + ' | ' + $('imageRangeLower').value);
+        $('imageRangeBlack').value === '60.00' && $('imageRangeWhite').value === '-100.00',
+        $('imageRangeBlack').value + ' | ' + $('imageRangeWhite').value);
       check('范围标签显示当前单位',
         $('imageRangeLabel').textContent.indexOf(UNIT_C) >= 0, $('imageRangeLabel').textContent);
-      check('改图片范围不会改动色标节点',
+      check('改图片温度不会改动色标节点',
         state.scale.nodes.map(n => roundHalfEven(n.kelvin)).join() === nodesBefore,
         state.scale.nodes.map(n => n.kelvin).join());
 
@@ -1362,8 +1377,8 @@ window.__runBrowserTest = async function () {
         check('Legend 底端拉伸为色标下端节点颜色',
           bottom[0] === 0 && bottom[1] === 0 && bottom[2] === 200, [...bottom].join(','));
 
-        // 图片范围 60~-100 下，-10°C 处应是 0°C 红与 -20°C 蓝的插值
-        const yOfC = c => Math.round((60 - c) / 160 * (lg.height - 1));
+        // 图片温度 60~-100 下，-10°C 处应是 0°C 红与 -20°C 蓝的插值
+        const yOfC = c => Math.round(kelvinToP(c2k(c)) / P_MAX * (lg.height - 1));
         const mid = barPx(yOfC(-10));
         check('Legend 中间按节点插值（约 100,0,100）',
           mid[1] === 0 && mid[0] > 85 && mid[0] < 115 && mid[2] > 85 && mid[2] < 115,
@@ -1391,28 +1406,98 @@ window.__runBrowserTest = async function () {
           [...bottom].join(','));
       }
 
-      // 非法输入被拒绝并恢复原值
-      $('imageRangeUpper').value = '-90'; $('imageRangeLower').value = '-80';
+      // 大小关系不再受限：白色温度高于黑色温度 = 浅色代表高温
+      {
+        const sc = state.scale;
+        sc.nodes = [makeNode(c2k(0), [200, 0, 0], true), makeNode(c2k(-80), [0, 0, 200])];
+        sortNodes(sc.nodes);
+        $('imageRangeBlack').value = '0'; $('imageRangeWhite').value = '-80';
+        commitRange();
+        await sleep(40);
+        check('正常极性：黑像素 -> 0°C 红、白像素 -> -80°C 蓝',
+          state.mapper.colorAtKelvin(pToKelvin(0)).join() === '200,0,0'
+          && state.mapper.colorAtKelvin(pToKelvin(255)).join() === '0,0,200',
+          state.mapper.colorAtKelvin(pToKelvin(0)).join() + ' / '
+            + state.mapper.colorAtKelvin(pToKelvin(255)).join());
+        const lg = $('legendCanvas');
+        const lctx = lg.getContext('2d', { willReadFrequently: true });
+        const top0 = lctx.getImageData(8, 2, 1, 1).data;
+        const bot0 = lctx.getImageData(8, lg.height - 3, 1, 1).data;
+        check('正常极性：色标柱顶红（黑色端）/ 底蓝（白色端）',
+          top0[0] > 180 && bot0[2] > 180, [...top0].join(',') + ' / ' + [...bot0].join(','));
+
+        // 反过来填：黑色 -80、白色 0（越白越热）——必须被接受，且着色整体反转
+        $('imageRangeBlack').value = '-80'; $('imageRangeWhite').value = '0';
+        commitRange();
+        check('白色温度高于黑色温度被接受（不再要求上限 > 下限）',
+          !$('msgDialog').open
+          && Math.abs(toDisplay(K_BLACK, UNIT_C) + 80) < 1e-9
+          && Math.abs(toDisplay(K_WHITE, UNIT_C)) < 1e-9,
+          msgText());
+        check('反向时程序仍比较出上限 0 / 下限 -80',
+          Math.abs(toDisplay(K_MAX, UNIT_C)) < 1e-9 && Math.abs(toDisplay(K_MIN, UNIT_C) + 80) < 1e-9,
+          toDisplay(K_MAX, UNIT_C) + ' / ' + toDisplay(K_MIN, UNIT_C));
+        check('反向时输入框保持用户填的值（不按大小重排）',
+          $('imageRangeBlack').value === '-80.00' && $('imageRangeWhite').value === '0.00',
+          $('imageRangeBlack').value + ' | ' + $('imageRangeWhite').value);
+        check('反向极性：黑像素 -> -80°C 蓝、白像素 -> 0°C 红（浅色代表高温）',
+          state.mapper.colorAtKelvin(pToKelvin(0)).join() === '0,0,200'
+          && state.mapper.colorAtKelvin(pToKelvin(255)).join() === '200,0,0',
+          state.mapper.colorAtKelvin(pToKelvin(0)).join() + ' / '
+            + state.mapper.colorAtKelvin(pToKelvin(255)).join());
+        await sleep(40);
+        const top1 = lctx.getImageData(8, 2, 1, 1).data;
+        const bot1 = lctx.getImageData(8, lg.height - 3, 1, 1).data;
+        check('反向极性：色标柱顶蓝（黑色端 -80）/ 底红（白色端 0）',
+          top1[2] > 180 && bot1[0] > 180, [...top1].join(',') + ' / ' + [...bot1].join(','));
+        const mTop = state.mapper.colorAtKelvin(pToKelvin(0));
+        check('反向时竖向 legend 顶端与图片着色同向（同为黑像素那一端的颜色）',
+          top1[2] > 180 && mTop[2] > 180 && top1[0] < 40 && mTop[0] < 40,
+          [...top1].join(',') + ' vs ' + mTop.join(','));
+
+        // 两个端点温度相同：整幅图一个温度，也不该报错
+        $('imageRangeBlack').value = '20'; $('imageRangeWhite').value = '20';
+        commitRange();
+        check('黑白同温也被接受（整幅图一个温度）',
+          !$('msgDialog').open && Math.abs(K_SPAN) < 1e-9 && Math.abs(toDisplay(pToKelvin(0), UNIT_C) - 20) < 1e-9
+          && Math.abs(toDisplay(pToKelvin(255), UNIT_C) - 20) < 1e-9,
+          msgText() + ' K_SPAN=' + K_SPAN);
+        check('黑白同温时整幅取同一个颜色',
+          state.mapper.colorAtKelvin(pToKelvin(0)).join()
+            === state.mapper.colorAtKelvin(pToKelvin(255)).join());
+        closeMsg();
+      }
+
+      // 回到 60 / -100（后面的用例继续用这套图片温度）
+      $('imageRangeBlack').value = '60'; $('imageRangeWhite').value = '-100';
+      commitRange();
+
+      // 非法输入（数值超范围）被拒绝并恢复原值
+      $('imageRangeBlack').value = '3000'; $('imageRangeWhite').value = '-100';
       commitRange();
       const reason2 = msgText();
       closeMsg();
-      check('上限 <= 下限 被拒绝', reason2.indexOf('上限必须大于下限') >= 0, reason2.slice(0, 120));
-      check('拒绝后输入框恢复原值',
-        $('imageRangeUpper').value === '60.00' && $('imageRangeLower').value === '-100.00',
-        $('imageRangeUpper').value + ' | ' + $('imageRangeLower').value);
+      check('超出允许温度被拒绝', reason2.indexOf('必须落在') >= 0, reason2.slice(0, 120));
+      check('拒绝后输入框恢复原值（60 / -100）',
+        $('imageRangeBlack').value === '60.00' && $('imageRangeWhite').value === '-100.00',
+        $('imageRangeBlack').value + ' | ' + $('imageRangeWhite').value);
 
       // 单位切换时显示随之换算
       $('unitSelect').value = UNIT_K; fire($('unitSelect'));
-      check('切到 K 后范围显示为 Kelvin',
-        Math.abs(parseFloat($('imageRangeUpper').value) - (60 + 273.15)) < 0.01, $('imageRangeUpper').value);
+      check('切到 K 后温度显示为 Kelvin',
+        Math.abs(parseFloat($('imageRangeBlack').value) - (60 + 273.15)) < 0.01, $('imageRangeBlack').value);
+      check('单位切换不会改变黑色 / 白色的对应关系',
+        Math.abs(toDisplay(K_BLACK, UNIT_C) - 60) < 1e-9 && Math.abs(toDisplay(K_WHITE, UNIT_C) + 100) < 1e-9);
       $('unitSelect').value = UNIT_C; fire($('unitSelect'));
 
       // 恢复默认（同时把色标恢复成默认，后面的用例继续用）
-      $('imageRangeUpper').value = '50'; $('imageRangeLower').value = '-85';
+      $('imageRangeBlack').value = '50'; $('imageRangeWhite').value = '-85';
       commitRange();
-      check('可恢复为默认范围 50 / -85',
-        Math.abs(toDisplay(K_MAX, UNIT_C) - 50) < 1e-9 && Math.abs(toDisplay(K_MIN, UNIT_C) + 85) < 1e-9,
-        toDisplay(K_MAX, UNIT_C) + ' / ' + toDisplay(K_MIN, UNIT_C));
+      check('可恢复为默认 黑色 50 / 白色 -85',
+        Math.abs(toDisplay(K_BLACK, UNIT_C) - 50) < 1e-9 && Math.abs(toDisplay(K_WHITE, UNIT_C) + 85) < 1e-9,
+        toDisplay(K_BLACK, UNIT_C) + ' / ' + toDisplay(K_WHITE, UNIT_C));
+      check('默认仍然是黑色端为高温（上限 50 / 下限 -85）',
+        Math.abs(toDisplay(K_MAX, UNIT_C) - 50) < 1e-9 && Math.abs(toDisplay(K_MIN, UNIT_C) + 85) < 1e-9);
       await doNewScale();
       refreshAll();
     }
@@ -1912,8 +1997,8 @@ window.__runMobileTest = async function (dev) {
     /* ---- 手机专属细节 ---- */
     if (dev.width <= 560) {
       check('输入框字号 ≥ 16px（iOS 聚焦不放大整页）',
-        parseFloat(getComputedStyle($('imageRangeUpper')).fontSize) >= 16,
-        getComputedStyle($('imageRangeUpper')).fontSize);
+        parseFloat(getComputedStyle($('imageRangeBlack')).fontSize) >= 16,
+        getComputedStyle($('imageRangeBlack')).fontSize);
       check('预览标题行允许换行（图片信息独占一行）',
         box($('previewInfo')).width >= vw * 0.7,
         Math.round(box($('previewInfo')).width) + ' vs ' + vw);
@@ -2021,6 +2106,30 @@ if (evaluated.result && evaluated.result.exceptionDetails) {
 await send('Runtime.evaluate', { expression: 'window.__setupShot()', awaitPromise: true, returnByValue: true });
 await sleep(600);
 const shot = await send('Page.captureScreenshot', { format: 'png' });
+
+// 再截一张「浅色代表高温」（黑色 -85 / 白色 50）的图，便于核对反向着色与色标柱方向
+await send('Runtime.evaluate', {
+  expression: '(function () {'
+    + " document.getElementById('imageRangeBlack').value = '-85';"
+    + " document.getElementById('imageRangeWhite').value = '50';"
+    + ' commitRange(); return true; })()',
+  returnByValue: true,
+});
+await sleep(500);
+const shotRev = await send('Page.captureScreenshot', { format: 'png' });
+if (shotRev.result && shotRev.result.data) {
+  fs.writeFileSync(path.join(outDir, 'browser_shot_reversed.png'),
+    Buffer.from(shotRev.result.data, 'base64'));
+}
+// 恢复默认的黑色 50 / 白色 -85，后面的截图与用例继续用正常极性
+await send('Runtime.evaluate', {
+  expression: '(function () {'
+    + " document.getElementById('imageRangeBlack').value = '50';"
+    + " document.getElementById('imageRangeWhite').value = '-85';"
+    + ' commitRange(); return true; })()',
+  returnByValue: true,
+});
+await sleep(400);
 
 // 再截一张打开节点编辑对话框的图，便于核对颜色选择器外观
 await send('Runtime.evaluate', {
