@@ -549,6 +549,13 @@
     color: var(--accent); border-color: var(--accent); background: var(--accent-soft);
   }
   #scaleLibCopy.fading { opacity: 0; }
+  /* 「保存色标 → 导出到剪贴板」：菜单项用同一套反馈（停留 2 秒 → 渐隐 → 复原）。
+     复制成功后菜单先不收起，让「已复制」看得见；菜单一关就立刻复原。 */
+  #miCopyScale {
+    transition: background-color .12s var(--ease), color .12s var(--ease), opacity .3s var(--ease);
+  }
+  #miCopyScale.copied { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  #miCopyScale.fading { opacity: 0; }
 
   .hint { color: var(--text-2); font-size: 12px; }
   /* 输入色标：粘贴 JSON 的多行文本框 + 行内错误 */
@@ -726,6 +733,8 @@
           <div class="dd">
             <div class="mi" data-act="save">保存</div>
             <div class="mi" data-act="saveas">另存为</div>
+            <div class="mi" data-act="copyScale" data-keep-menu="1" id="miCopyScale"
+                 title="把当前色标导出成 JSON 文本并复制到剪贴板（内容与「另存为」的文件完全一样）">导出到剪贴板</div>
           </div>
         </div>
       </div>
@@ -2611,6 +2620,7 @@ function updateActionStates() {
   setMenuEnabled('inputScale', !busy);
   setMenuEnabled('save', !busy);
   setMenuEnabled('saveas', !busy);
+  setMenuEnabled('copyScale', !busy);
   setMenuEnabled('exportOne', hasImage && !busy);
   // 「批量导出」始终可点：没有勾选时点了会提示「请选择图片」，而不是静默无反应
   setMenuEnabled('exportBatch', !busy);
@@ -3651,6 +3661,53 @@ async function writeScale(handle, name) {
   }
 }
 
+/* ---- 「保存色标 → 导出到剪贴板」：与弹窗里那个按钮同一套文案与反馈节奏 ---- */
+
+const COPY_LABEL = '导出到剪贴板';
+const COPY_HOLD_MS = 2000;      // 「已复制」最多停留 2 秒
+const COPY_FADE_MS = 300;       // 之后逐渐隐去
+let copyLabelTimer = 0;
+let copyFadeTimer = 0;
+
+/** 立刻回到「导出到剪贴板」原文案，并中断任何进行中的停留 / 渐隐动画 */
+function resetCopyScaleLabel() {
+  if (copyLabelTimer) { clearTimeout(copyLabelTimer); copyLabelTimer = 0; }
+  if (copyFadeTimer) { clearTimeout(copyFadeTimer); copyFadeTimer = 0; }
+  const el = $('miCopyScale');
+  if (!el) return;
+  el.classList.remove('copied', 'fading');
+  el.textContent = COPY_LABEL;
+}
+
+/**
+ * 「保存色标 → 导出到剪贴板」：把**当前正在编辑的色标**按「另存为」的格式复制成 JSON 文本，
+ * 顺序与内容完全一样（同一个 scaleToText），可以直接粘到聊天窗口或用「输入色标」贴回来。
+ */
+async function actionCopyScale() {
+  if (state.busy) return false;
+  resetCopyScaleLabel();
+  const text = scaleToText(state.scale);
+  if (!await copyTextToClipboard(text)) {
+    await showError('导出到剪贴板',
+      '无法写入剪贴板（浏览器可能不允许，或窗口没有焦点）。\n'
+      + '可以改用「保存色标 → 另存为」导出成 JSON 文件。');
+    return false;
+  }
+  log('已把当前色标「' + state.scale.name + '」的 JSON 复制到剪贴板（'
+    + state.scale.nodes.length + ' 个节点，内容与「另存为」一致）。');
+  const el = $('miCopyScale');
+  if (el) {
+    el.classList.add('copied');
+    el.textContent = '已复制';
+    copyLabelTimer = setTimeout(() => {
+      copyLabelTimer = 0;
+      el.classList.add('fading');
+      copyFadeTimer = setTimeout(() => { copyFadeTimer = 0; resetCopyScaleLabel(); }, COPY_FADE_MS);
+    }, COPY_HOLD_MS);
+  }
+  return true;
+}
+
 /* =========================================================================
  * 第 19 部分：导出（单张 / 批量）
  * ========================================================================= */
@@ -4167,6 +4224,7 @@ function handleAction(act) {
     case 'inputScale': actionInputScale(); break;
     case 'save': actionSave(); break;
     case 'saveas': actionSaveAs(); break;
+    case 'copyScale': actionCopyScale(); break;
     case 'exportOne': actionExportCurrent(); break;
     case 'exportBatch': actionExportBatch(); break;
     case 'quit': actionQuit(); break;
@@ -4180,6 +4238,7 @@ function handleAction(act) {
 
 function closeAllMenus() {
   document.querySelectorAll('.menu.open').forEach(m => m.classList.remove('open'));
+  resetCopyScaleLabel();     // 菜单一关，「导出到剪贴板」立刻切回原文案
 }
 
 function bindUI() {
@@ -4200,10 +4259,16 @@ function bindUI() {
   });
   document.addEventListener('click', closeAllMenus);
   document.querySelectorAll('[data-act]').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', e => {
       const act = el.dataset.act;
+      const keepMenu = el.dataset.keepMenu === '1';
+      const menu = el.closest('.menu');
+      const disabled = el.classList.contains('disabled') || el.disabled;
+      // 「导出到剪贴板」要留出「已复制」反馈的时间，所以它点完不收起菜单
+      if (keepMenu) e.stopPropagation();
       closeAllMenus();
-      if (el.classList.contains('disabled') || el.disabled) return;
+      if (keepMenu && menu && !disabled) menu.classList.add('open');
+      if (disabled) return;
       handleAction(act);
     });
   });
@@ -4515,7 +4580,7 @@ else init();
 | --- | --- | --- |
 | 打开色标 | 中间列最上方 | **预设** / 我的色标 / 从设备中导入 / 输入色标 |
 | 管理色标 | 中间列，夹在「打开色标」与「保存色标」之间 | 我的色标（管理弹窗）/ 从设备导入（收进色标库） |
-| 保存色标 | 中间列最上方 | 保存 / 另存为 |
+| 保存色标 | 中间列最上方 | 保存 / 另存为 / 导出到剪贴板 |
 | 导出图片 | 图片列表上方 | 单张导出（当前预览）/ 批量导出（已勾选的图片） |
 
 ## 2. 图片温度：黑色温度 / 白色温度
@@ -4629,10 +4694,15 @@ else init();
 - 每个色标都有一个毫秒级创建时间戳 `created`，它是色标的**唯一身份**，一经创建永不修改；名称只是标签，随时可改。
 - 同一时间戳 = 同一条色标（保存时覆盖）；不同时间戳 = 两个色标（哪怕名字完全一样）。
 
-### 5.2 保存 / 另存为
+### 5.2 保存 / 另存为 / 导出到剪贴板
 
 - **保存**：写入浏览器本地色标库（localStorage 的 `ir_enhancer.scales.v1`），**不会**动设备上已打开的文件。
 - **另存为**：导出一份 JSON 到设备（Windows 原生另存为；不支持的浏览器改为下载）。
+- **导出到剪贴板**：把**当前正在编辑的这条色标**复制成 JSON 文本（内容与「另存为」完全一样），
+  不用先存文件就能粘到聊天窗口 / 记事本，或者用「打开色标 → 输入色标」在别处贴回来。
+  复制成功后这一项显示 **「已复制」**（蓝色高亮），**最多停留 2 秒**再渐隐复原；
+  这 2 秒里菜单**不会自动收起**（否则看不到反馈），点别处关掉菜单就**立刻**切回原文案。
+  万一浏览器不允许写剪贴板，会弹提示并建议改用「另存为」。
 - 有未保存修改时窗口标题会带 `*`；新建 / 载入 / 导入前会先问「是否保存」，直接关页面也会提醒。
 
 ### 5.3 我的色标

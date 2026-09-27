@@ -593,6 +593,18 @@ export async function run() {
     check('输入色标：缺 created 时补当前时间戳',
       scaleFromObject(JSON.parse('{"nodes":[{"temperature_k":300,"color":"#000000"}]}')).created > 1e12);
 
+    /* 8d. 「保存色标 → 导出到剪贴板」（复制当前色标）与文案契约 */
+    check('存在「保存色标 → 导出到剪贴板」的动作与复位函数',
+      typeof actionCopyScale === 'function' && typeof resetCopyScaleLabel === 'function');
+    check('导出到剪贴板的文案与停留节奏和弹窗里那颗按钮一致',
+      COPY_LABEL === '导出到剪贴板' && COPY_HOLD_MS === 2000 && COPY_FADE_MS === 300,
+      COPY_LABEL + ' / ' + COPY_HOLD_MS + ' / ' + COPY_FADE_MS);
+    check('它复制的是**当前色标**、走的是同一个剪贴板函数',
+      /scaleToText\\(state\\.scale\\)/.test(actionCopyScale.toString())
+      && /copyTextToClipboard\\(/.test(actionCopyScale.toString()));
+    check('菜单里确实挂了这一项（data-act="copyScale"）',
+      /data-act="copyScale"/.test(fs.readFileSync(HTMLPATH, 'utf8')));
+
     setRange(c2k(60), c2k(-100));
     parseScaleRecord(legacy);
     check('只读解析不改动当前范围', approx(cMax(), 60) && approx(cMin(), -100), cMax() + ' / ' + cMin());

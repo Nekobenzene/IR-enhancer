@@ -419,8 +419,9 @@ window.__runBrowserTest = async function () {
         openMenu.parentElement.className + ' / ' + saveMenu.parentElement.className);
       check('「打开色标」含 预设 / 导入色标',
         !!openMenu.querySelector('[data-act="presets"]') && !!openMenu.querySelector('[data-act="open"]'));
-      check('「保存色标」含 保存 / 另存为',
-        !!saveMenu.querySelector('[data-act="save"]') && !!saveMenu.querySelector('[data-act="saveas"]'));
+      check('「保存色标」含 保存 / 另存为 / 导出到剪贴板',
+        !!saveMenu.querySelector('[data-act="save"]') && !!saveMenu.querySelector('[data-act="saveas"]')
+        && !!saveMenu.querySelector('[data-act="copyScale"]'));
 
       check('图片列表上方有「导出图片」下拉按钮',
         !!$('btnExportMenu') && $('btnExportMenu').textContent.indexOf('导出图片') >= 0);
@@ -1064,6 +1065,134 @@ window.__runBrowserTest = async function () {
       $('myScalesCancel').click();
       await p2;
       await sleep(40);
+    }
+
+    /* ---- 保存色标 → 导出到剪贴板（复制当前色标，菜单里直接可用） ---- */
+    {
+      const saveMenu = $('btnSaveScale').closest('.menu');
+      check('「保存色标」里多了一项「导出到剪贴板」',
+        !!saveMenu.querySelector('[data-act="copyScale"]')
+        && saveMenu.querySelector('[data-act="copyScale"]').textContent === '导出到剪贴板',
+        saveMenu.querySelector('[data-act="copyScale"]')
+          ? saveMenu.querySelector('[data-act="copyScale"]').textContent : 'missing');
+      check('它在「另存为」下面（保存 / 另存为 / 导出到剪贴板）',
+        Array.prototype.map.call(saveMenu.querySelectorAll('.dd .mi'), el => el.textContent).join('|')
+          === '保存|另存为|导出到剪贴板',
+        Array.prototype.map.call(saveMenu.querySelectorAll('.dd .mi'), el => el.textContent).join('|'));
+
+      // 桩掉剪贴板，捕获写进去的文本
+      let copied = null;
+      try {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: { writeText: t => { copied = t; return Promise.resolve(); } },
+        });
+      } catch (e) { /* ignore */ }
+
+      // 真实点击：保存色标 → 导出到剪贴板
+      state.scale = presetToScale(presetByName('IR-RBTOP'), 1700000000333);
+      state.baseline = scaleToText(state.scale);
+      refreshAll();
+      updateActionStates();
+      $('btnSaveScale').click();
+      check('点「保存色标」展开菜单', saveMenu.classList.contains('open'));
+      saveMenu.querySelector('[data-act="copyScale"]').click();
+      await sleep(80);
+
+      check('点一下就把当前色标写进剪贴板', typeof copied === 'string' && copied.length > 0,
+        String(copied).slice(0, 60));
+      check('复制内容 = 「另存为」的内容（同一个 scaleToText）',
+        copied === scaleToText(state.scale), String(copied).slice(0, 80));
+      let copiedObj = null;
+      try { copiedObj = JSON.parse(copied); } catch (e) { /* ignore */ }
+      check('复制出来的是可解析的色标 JSON（名字 / 节点 / 时间戳都对）',
+        !!copiedObj && copiedObj.name === 'IR-RBTOP' && copiedObj.nodes.length === 20
+        && Number(copiedObj.created) === 1700000000333,
+        copiedObj ? copiedObj.name + '/' + copiedObj.nodes.length + '/' + copiedObj.created : 'null');
+      check('复制内容与当前色标逐节点一致',
+        JSON.stringify(copiedObj) === JSON.stringify(scaleToObject(state.scale)));
+      check('复制不会把色标标成「已保存」（时间戳 / 基线不受影响）',
+        state.scale.created === 1700000000333 && !isDirty());
+
+      check('复制成功后菜单项显示「已复制」并高亮',
+        $('miCopyScale').textContent === '已复制' && $('miCopyScale').classList.contains('copied'),
+        $('miCopyScale').textContent + ' / ' + $('miCopyScale').className);
+      check('有反馈期间菜单保持展开（看得见「已复制」）',
+        saveMenu.classList.contains('open'));
+      check('运行日志里写明复制了哪条色标',
+        $('logView').textContent.indexOf('IR-RBTOP') >= 0
+        && $('logView').textContent.indexOf('复制到剪贴板') >= 0);
+
+      // 1 秒时还在；2 秒后渐隐；再 0.3 秒切回原文案
+      await sleep(1300);
+      check('过了约 1 秒仍显示「已复制」', $('miCopyScale').textContent === '已复制',
+        $('miCopyScale').textContent);
+      await sleep(800);
+      check('约 2 秒后开始渐隐（fading）', $('miCopyScale').classList.contains('fading'),
+        $('miCopyScale').className);
+      await sleep(500);
+      check('渐隐结束后切回「导出到剪贴板」',
+        $('miCopyScale').textContent === '导出到剪贴板' && !$('miCopyScale').classList.contains('copied'),
+        $('miCopyScale').textContent + ' / ' + $('miCopyScale').className);
+
+      // 复制后在 2 秒内点别处收起菜单 -> 立刻切回原文案（不留假文案）
+      $('btnSaveScale').click();
+      saveMenu.querySelector('[data-act="copyScale"]').click();
+      await sleep(80);
+      check('再次复制又显示「已复制」', $('miCopyScale').textContent === '已复制');
+      document.body.click();                                     // 点空白处收起菜单
+      check('收起菜单后立刻切回原文案',
+        !saveMenu.classList.contains('open') && $('miCopyScale').textContent === '导出到剪贴板',
+        $('miCopyScale').textContent);
+      await sleep(2400);
+      check('计时器已中断，不会再冒出「已复制」',
+        $('miCopyScale').textContent === '导出到剪贴板', $('miCopyScale').textContent);
+
+      // Esc 也能收起菜单并复位
+      $('btnSaveScale').click();
+      saveMenu.querySelector('[data-act="copyScale"]').click();
+      await sleep(80);
+      closeAllMenus();
+      check('关闭菜单同样立刻复位', $('miCopyScale').textContent === '导出到剪贴板');
+
+      // 批量导出期间（busy）这一项要跟着变灰
+      setBusy(true);
+      check('界面锁定时「导出到剪贴板」被禁用',
+        $('miCopyScale').classList.contains('disabled'));
+      setBusy(false);
+      check('解锁后恢复可用', !$('miCopyScale').classList.contains('disabled'));
+
+      // 剪贴板不可用：弹提示建议改用「另存为」，且不显示「已复制」
+      {
+        const origExec = document.execCommand;
+        try {
+          Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: () => Promise.reject(new Error('not allowed')) },
+          });
+          document.execCommand = () => false;
+          const pCopy = actionCopyScale();      // 失败时会弹提示，等用户点「确定」才 resolve
+          await sleep(80);
+          check('复制失败时弹提示并建议改用「另存为」',
+            $('msgDialog').open === true && $('msgText').textContent.indexOf('另存为') >= 0,
+            $('msgText').textContent.slice(0, 80));
+          check('复制失败时不显示「已复制」',
+            $('miCopyScale').textContent === '导出到剪贴板'
+            && !$('miCopyScale').classList.contains('copied'), $('miCopyScale').textContent);
+          $('msgOk').click();
+          await pCopy;
+          await sleep(40);
+        } finally {
+          document.execCommand = origExec;
+          // 桩用完要收回：装一个「能用」的剪贴板，后续用例与截图照常
+          try {
+            Object.defineProperty(navigator, 'clipboard', {
+              configurable: true,
+              value: { writeText: () => Promise.resolve() },
+            });
+          } catch (e) { /* ignore */ }
+        }
+      }
     }
 
     /* ---- 打开色标 → 输入色标（从文本载入） ---- */
@@ -2152,6 +2281,23 @@ if (shotMenu.result && shotMenu.result.data) {
   fs.writeFileSync(path.join(outDir, 'browser_shot_menu.png'), Buffer.from(shotMenu.result.data, 'base64'));
 }
 await send('Runtime.evaluate', { expression: 'closeAllMenus()', returnByValue: false });
+
+// 再截一张「保存色标 → 导出到剪贴板」的「已复制」反馈（菜单保持展开）
+await send('Runtime.evaluate', {
+  expression: '(function () {'
+    + " document.getElementById('btnSaveScale').click();"
+    + " document.querySelector('[data-act=\"copyScale\"]').click();"
+    + ' return true; })()',
+  returnByValue: true,
+});
+await sleep(400);
+const shotCopy = await send('Page.captureScreenshot', { format: 'png' });
+if (shotCopy.result && shotCopy.result.data) {
+  fs.writeFileSync(path.join(outDir, 'browser_shot_copy.png'),
+    Buffer.from(shotCopy.result.data, 'base64'));
+}
+await send('Runtime.evaluate', { expression: 'closeAllMenus()', returnByValue: false });
+await sleep(300);
 
 // 再截一张「使用说明」弹窗（桌面是左右分栏，手机上会变成上下分栏）
 await send('Runtime.evaluate', {
